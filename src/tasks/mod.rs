@@ -11,6 +11,9 @@ use async_trait::async_trait;
 
 use crate::message::Message;
 
+#[cfg(feature = "task-http")]
+pub mod http;
+
 #[async_trait]
 pub trait Task: Send + Sync {
     /// Runs the work for one message. It may run twice for the same message, so it must be idempotency-aware.

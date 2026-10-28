@@ -48,6 +48,8 @@ consumers:
       type: http
       method: POST
       url: https://billing.internal.example.com/api/orders
+      allowed_hosts:
+        - billing.internal.example.com   # the only hosts the URL may target; required
       headers:
         Authorization: Bearer change-me
       idempotency_header: Idempotency-Key   # filled with the stable message id

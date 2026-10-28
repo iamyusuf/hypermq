@@ -48,3 +48,27 @@ impl TaskRegistry {
 - Secrets come from configuration or environment and are never included in `reason` or logs.
 - Outbound destinations are validated at `build` time where possible (SSRF).
 - Each kind lives in its own module under `tasks/`, optionally behind a Cargo feature. `tasks/http` is the only initial kind.
+
+## HTTP Task (`type: http`)
+
+Behind the `task-http` Cargo feature, which is on by default. Settings:
+
+| Key | Required | Default | Notes |
+| --- | --- | --- | --- |
+| `url` | yes | | `http` or `https`; no credentials in the URL; host must be in `allowed_hosts`. |
+| `allowed_hosts` | yes | | Non-empty list of hosts the URL may target. Matched case-insensitively. This is the SSRF control. |
+| `method` | no | `POST` | Any valid HTTP method. |
+| `headers` | no | empty | Static headers, for example `Authorization`. Values are never logged or shown in Debug output. |
+| `idempotency_header` | no | none | Header set to the stable message id on every attempt. |
+
+The message body is sent as the request body. The message `content-type` header is forwarded when present. Unknown keys fail at config load.
+
+Outcome mapping:
+
+- 2xx: `Success`.
+- 429 and 5xx: `Retryable`.
+- Other statuses, including 3xx: `Permanent`. Redirects are not followed.
+- Timeout or connection failure: `Retryable`. Other transport errors are also `Retryable`.
+- Invalid header value built from the message (for example a message id that is not a valid header value): `Permanent`.
+
+Failure reasons never include the URL.

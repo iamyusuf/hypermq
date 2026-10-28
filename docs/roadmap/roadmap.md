@@ -75,3 +75,21 @@ Exit per kind: configuration schema documented, outcome mapping defined, timeout
 - Multiple Tasks per consumer (sequence or fan-out) with a defined partial-failure policy.
 
 Exit: these behaviors are covered by tests and documented, and the open design questions in [AGENTS.md](../../AGENTS.md) are resolved.
+
+## Phase 8: Publish outbox (deferred, not planned for implementation now)
+
+Recorded for later. Until this phase, publishing is fail-fast: if RabbitMQ is unreachable or a confirm times out, the API returns `503` with `Retry-After` and the client retries. Clients may send an idempotency key or message id so retries do not create duplicates.
+
+Start this phase only if clients cannot retry on their own.
+
+- Add an outbox `Publisher` implementation behind the existing `Publisher` trait, selected by configuration. HTTP handlers do not change.
+- Persist each message to a durable store (for example an embedded SQLite file on a mounted volume) before responding, then respond `202 Accepted` instead of "published".
+- Add a relay task that publishes stored messages to RabbitMQ with publisher confirms, removes them after the confirm, and retries with backoff while the broker is down.
+- Bound the outbox by size and age, and dead-letter messages that can never be published.
+- Define ordering rules, since a relay can reorder messages across retries.
+- Expose outbox depth, oldest message age, and relay failures as metrics, and report `degraded` health when the outbox is growing.
+- Document the deployment requirement: the store needs a persistent volume, and each replica has its own outbox.
+
+Not planned: an in-memory-only buffer, because it loses data on restart.
+
+Exit: messages accepted during a RabbitMQ outage are published after it recovers, with at-least-once delivery and no loss across an app restart. Tests cover the outage, restart, full outbox, and permanent-failure paths.

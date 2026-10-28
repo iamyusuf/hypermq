@@ -6,6 +6,7 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 
 use crate::broker::topology::Topology;
+use crate::consumers::{self, ConsumerConfig};
 use crate::error::ConfigError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -32,6 +33,8 @@ pub struct Config {
     pub http_api: HttpApiConfig,
     #[serde(default)]
     pub topology: Topology,
+    #[serde(default)]
+    pub consumers: Vec<ConsumerConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -74,7 +77,6 @@ impl Config {
         Self::from_yaml(&text)
     }
 
-    /// Sections for later phases (consumers) are ignored until they are implemented.
     pub fn from_yaml(text: &str) -> Result<Self, ConfigError> {
         let config: Config = serde_yaml_ng::from_str(text)?;
         config.validate()?;
@@ -89,6 +91,7 @@ impl Config {
             ));
         }
         self.topology.validate().map_err(ConfigError::Invalid)?;
+        consumers::validate(&self.consumers).map_err(ConfigError::Invalid)?;
         Ok(())
     }
 }
@@ -111,9 +114,18 @@ mod tests {
     }
 
     #[test]
-    fn ignores_sections_for_later_phases() {
+    fn accepts_empty_sections() {
         let yaml = format!("{MINIMAL}consumers: []\ntopology: {{}}\n");
-        assert!(Config::from_yaml(&yaml).is_ok());
+        assert!(Config::from_yaml(&yaml).unwrap().consumers.is_empty());
+    }
+
+    #[test]
+    fn invalid_consumer_fails_config_load() {
+        let yaml = format!(
+            "{MINIMAL}consumers:\n  - name: a\n    queue: 'bad name'\n    retry:\n      max_attempts: 2\n      base_delay: 1s\n    task:\n      type: http\n"
+        );
+        let err = Config::from_yaml(&yaml).unwrap_err();
+        assert!(matches!(err, ConfigError::Invalid(msg) if msg.contains("queue")));
     }
 
     #[test]

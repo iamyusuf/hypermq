@@ -38,6 +38,7 @@ consumers:
   - name: notify-billing
     queue: orders.created
     prefetch: 10
+    timeout: 10s          # per-message limit on the Task; a timeout is retryable
     retry:
       max_attempts: 5
       base_delay: 5s
@@ -47,7 +48,6 @@ consumers:
       type: http
       method: POST
       url: https://billing.internal.example.com/api/orders
-      timeout: 10s
       headers:
         Authorization: Bearer change-me
       idempotency_header: Idempotency-Key   # filled with the stable message id

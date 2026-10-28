@@ -38,7 +38,7 @@ flowchart LR
 pub struct Message {
     pub id: MessageId,           // stable across redeliveries, used for idempotency
     pub body: Bytes,
-    pub headers: HeaderMap,
+    pub headers: BTreeMap<String, String>, // string headers, sorted for deterministic output
     pub routing: RoutingInfo,    // exchange, routing key, queue
     pub attempt: u32,            // delivery attempt, starting at 1
 }

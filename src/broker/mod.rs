@@ -2,9 +2,12 @@ pub mod rabbitmq;
 pub mod topology;
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
+
+use crate::message::Message;
 
 pub const MAX_NAME_LEN: usize = 255;
 pub const MAX_ROUTING_KEY_LEN: usize = 255;
@@ -63,4 +66,44 @@ pub enum PublishError {
 pub trait Publisher: Send + Sync {
     /// Publishes and waits for the broker confirm.
     async fn publish(&self, request: PublishRequest) -> Result<(), PublishError>;
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum BrokerError {
+    /// Connection or channel failure; the caller may resubscribe.
+    #[error("broker unavailable: {0}")]
+    Unavailable(String),
+    #[error("broker operation failed: {0}")]
+    Operation(String),
+}
+
+#[async_trait]
+pub trait Broker: Send + Sync {
+    /// Starts consuming a queue; `prefetch` bounds unsettled deliveries.
+    async fn consume(
+        &self,
+        queue: &str,
+        prefetch: u16,
+    ) -> Result<Box<dyn Subscription>, BrokerError>;
+}
+
+#[async_trait]
+pub trait Subscription: Send {
+    /// Next delivery, or `None` when the subscription has ended.
+    async fn next(&mut self) -> Option<Result<Box<dyn Delivery>, BrokerError>>;
+}
+
+/// One delivered message. Only the consumer engine settles it, exactly once.
+#[async_trait]
+pub trait Delivery: Send {
+    fn message(&self) -> &Message;
+
+    /// Positive acknowledgement; call only after the Task succeeded.
+    async fn ack(self: Box<Self>) -> Result<(), BrokerError>;
+
+    /// Reject without requeue so the broker dead-letters the message.
+    async fn reject(self: Box<Self>) -> Result<(), BrokerError>;
+
+    /// Republish for a delayed retry with an incremented attempt, then ack the original.
+    async fn retry(self: Box<Self>, delay: Duration) -> Result<(), BrokerError>;
 }

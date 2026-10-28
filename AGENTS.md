@@ -4,7 +4,7 @@ HyperMQ is an HTTP wrapper around RabbitMQ. It also lets operators configure con
 
 ## Status
 
-Phase 0 (foundation) is implemented: YAML config loader (plain-text values, no variable interpolation), `--role` flag, tracing, typed errors, and `GET /health`. Nothing else exists yet (no RabbitMQ client, tasks, or consumers); the rest describes the intended design, so update this file as it is implemented.
+Phase 0 (foundation) is implemented: YAML config loader (plain-text values, no variable interpolation), `--role` flag, tracing, typed errors, and `GET /health`. Phase 1 (publish over HTTP) is implemented: `POST /publish` with a lapin-based `Publisher` (lazy reconnect, publisher confirms, mandatory publishes). Nothing else exists yet (no topology management, tasks, or consumers); the rest describes the intended design, so update this file as it is implemented.
 
 ## Concept
 
@@ -46,7 +46,11 @@ Solid arrows are implemented first; dashed ones are future Task kinds.
 ## Project layout
 
 - [src/main.rs](src/main.rs): entry point.
-- Planned modules: HTTP API, RabbitMQ client, consumer engine, and a `tasks` module with the `Task` trait plus one submodule per kind (`tasks/http` first).
+- [src/api/](src/api/mod.rs): HTTP routes (`/health`, `/publish`), request validation, stable `ApiError` responses.
+- [src/broker/](src/broker/mod.rs): `Publisher` trait and types; [src/broker/rabbitmq/](src/broker/rabbitmq/mod.rs) is the only code that imports lapin.
+- [tests/rabbitmq.rs](tests/rabbitmq.rs): integration tests that need RabbitMQ (ignored by default).
+- Planned modules: consumer engine, and a `tasks` module with the `Task` trait plus one submodule per kind (`tasks/http` first).
+- [docs/api/publish.md](docs/api/publish.md): publish endpoint reference.
 - [docs/](docs/): design and API documentation.
 - [docs/roadmap/roadmap.md](docs/roadmap/roadmap.md): phase-by-phase plan; follow its order and exit criteria.
 - [docs/traits/](docs/traits/README.md): high-level trait contracts (`Task`, `Broker`, `Publisher`, `TopologyManager`, `RetryPolicy`).
@@ -61,6 +65,7 @@ Solid arrows are implemented first; dashed ones are future Task kinds.
 - Build: `cargo build`
 - Run: `cargo run`
 - Test: `cargo test`
+- Integration tests (need RabbitMQ): `HYPERMQ_TEST_RABBITMQ_URL=amqp://user:pass@localhost:5672 cargo test --test rabbitmq -- --ignored`; they create and delete uniquely named queues and exchanges
 - Lint: `cargo clippy --all-targets -- -D warnings`
 - Format: `cargo fmt`
 

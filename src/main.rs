@@ -1,8 +1,10 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use clap::Parser;
 use hypermq::api::{self, AppState};
+use hypermq::broker::rabbitmq::RabbitPublisher;
 use hypermq::config::{Config, Role};
 use hypermq::error::Error;
 use tracing_subscriber::EnvFilter;
@@ -40,6 +42,13 @@ async fn main() -> ExitCode {
 async fn run(cli: Cli) -> Result<(), Error> {
     let config = Config::load(&cli.config)?;
 
+    let publisher = Arc::new(RabbitPublisher::new(config.broker.url));
+    if cli.role != Role::Consumers
+        && let Err(err) = publisher.connect().await
+    {
+        tracing::warn!(%err, "RabbitMQ is unreachable at startup; publishes fail until it recovers");
+    }
+
     let listener = tokio::net::TcpListener::bind(config.http_api.bind).await?;
     tracing::info!(role = cli.role.as_str(), bind = %config.http_api.bind, "starting");
 
@@ -48,6 +57,7 @@ async fn run(cli: Cli) -> Result<(), Error> {
         api::router(AppState {
             role: cli.role,
             max_body_bytes: config.http_api.max_body_bytes,
+            publisher,
         }),
     )
     .await?;

@@ -38,11 +38,12 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
 
-A running RabbitMQ will be required once publishing and consuming are implemented.
+Publishing needs a reachable RabbitMQ (`broker.url` in the config file); without one the service starts and `POST /publish` answers `503`. Integration tests are ignored by default; see [AGENTS.md](AGENTS.md#commands).
 
 ## Documentation
 
 - [Roadmap](docs/roadmap/roadmap.md): phase-by-phase plan.
+- [Publish API](docs/api/publish.md): `POST /publish` request, responses, and broker behavior.
 - [Traits](docs/traits/README.md): `Task`, `Broker`, `Publisher`, `TopologyManager`, `RetryPolicy`.
 - [Consumer manager](docs/core/consumer-manager.md): consumer lifecycle and loop.
 - [Deployment](docs/core/deployment.md): roles and container layout.

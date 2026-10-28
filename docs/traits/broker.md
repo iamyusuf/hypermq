@@ -8,16 +8,22 @@ These traits hide the AMQP client (for example lapin) so the HTTP API and consum
 #[async_trait]
 pub trait Publisher: Send + Sync {
     /// Publishes and waits for the broker confirm.
-    async fn publish(&self, request: PublishRequest) -> Result<PublishReceipt, PublishError>;
+    async fn publish(&self, request: PublishRequest) -> Result<(), PublishError>;
 }
 
 pub struct PublishRequest {
-    pub target: PublishTarget,   // Exchange { name } or Queue { name }
+    pub target: PublishTarget,   // Exchange(name) or Queue(name)
     pub routing_key: String,
-    pub headers: HeaderMap,
+    pub message_id: String,      // stable id for consumer-side idempotency
+    pub content_type: String,
+    pub headers: BTreeMap<String, String>,
     pub body: Bytes,
 }
+
+pub enum PublishError { Unavailable(String), Unroutable, TargetNotFound, Rejected }
 ```
+
+Implemented in `src/broker/mod.rs`; the RabbitMQ implementation is `RabbitPublisher`. See [the publish API](../api/publish.md).
 
 `PublishRequest` is validated and size-bounded before it reaches the `Publisher`; the HTTP handler stays thin.
 

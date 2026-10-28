@@ -1,8 +1,9 @@
 # Illustrative config; the format is not final (see "Open design questions" in AGENTS.md).
-# Values like ${VAR} are read from the environment so secrets stay out of the file.
+# Values are plain text: HyperMQ does not expand variables. Provide the real file at deploy time
+# (for example from a secret mount) and keep it out of version control.
 
 broker:
-  url: ${RABBITMQ_URL}
+  url: amqp://hypermq:change-me@localhost:5672
 
 http_api:
   bind: 0.0.0.0:8080
@@ -45,5 +46,5 @@ consumers:
       url: https://billing.internal.example.com/api/orders
       timeout: 10s
       headers:
-        Authorization: Bearer ${BILLING_API_TOKEN}
+        Authorization: Bearer change-me
       idempotency_header: Idempotency-Key   # filled with the stable message id

@@ -24,7 +24,7 @@ flowchart LR
 
 ## Configuration
 
-Consumers, topology, and Task settings are declared in YAML. Secrets are referenced as `${VAR}` and read from the environment, not stored in the file. The format is not final; see the [example config](docs/examples/config.yaml).
+Consumers, topology, and Task settings are declared in YAML with plain-text values; HyperMQ does not expand environment variables. Keep the config file (it holds credentials) out of version control and provide it at deploy time, for example from a secret mount. The format is not final; see the [example config](docs/examples/config.yaml).
 
 ## Getting started
 

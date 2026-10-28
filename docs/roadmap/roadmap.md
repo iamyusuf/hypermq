@@ -5,7 +5,7 @@ Phases are ordered by dependency. A phase is done when its exit criteria pass; d
 ## Phase 0: Foundation
 
 - Add core dependencies: tokio, serde, tracing, an HTTP server framework, an error-handling crate.
-- Define the configuration format and loader (settings, RabbitMQ URL from environment).
+- Define the configuration format and loader (plain-text YAML values, including the RabbitMQ URL; no variable interpolation).
 - Set up logging, a typed error model, and a `/health` endpoint.
 - Replace the placeholder in `src/main.rs` with the real entry point.
 

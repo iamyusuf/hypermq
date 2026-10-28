@@ -4,7 +4,7 @@ HyperMQ is an HTTP wrapper around RabbitMQ. It also lets operators configure con
 
 ## Status
 
-Early scaffold. `src/main.rs` contains placeholder code only, `Cargo.toml` has no dependencies, and `docs/` is empty. Everything below describes the intended design; update this file as it is implemented.
+Phase 0 (foundation) is implemented: YAML config loader (plain-text values, no variable interpolation), `--role` flag, tracing, typed errors, and `GET /health`. Nothing else exists yet (no RabbitMQ client, tasks, or consumers); the rest describes the intended design, so update this file as it is implemented.
 
 ## Concept
 

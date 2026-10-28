@@ -6,7 +6,7 @@ The project is containerized. A Docker Compose file provides a local RabbitMQ fo
 
 - The HyperMQ image is the same artifact in development and production. Only configuration differs.
 - The Compose RabbitMQ is a development convenience. Nothing in the code may assume the broker is local or managed by Compose.
-- The broker is selected only by `RABBITMQ_URL`. Topology is declared by HyperMQ (see [TopologyManager](../traits/topology.md)), so it works against any empty RabbitMQ.
+- The broker is selected only by `broker.url` in the config file. Topology is declared by HyperMQ (see [TopologyManager](../traits/topology.md)), so it works against any empty RabbitMQ.
 - Development credentials are for local use only and are never reused elsewhere.
 
 ## Services
@@ -53,12 +53,10 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy
-    environment:
-      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672
     ports:
       - "8080:8080"
     volumes:
-      - ./docs/examples/config.yaml:/etc/hypermq/config.yaml:ro
+      - ./config.yaml:/etc/hypermq/config.yaml:ro
     command: ["--role", "all", "--config", "/etc/hypermq/config.yaml"]
 
 volumes:
@@ -78,9 +76,9 @@ volumes:
 
 ## Configuration and secrets
 
-- Compose reads `RABBITMQ_USER` and `RABBITMQ_PASS` from a local `.env` file.
+- Compose reads `RABBITMQ_USER` and `RABBITMQ_PASS` from a local `.env` file for the RabbitMQ container only.
 - Commit a `.env.example` with placeholder values; `.env` is gitignored.
-- The app reads `RABBITMQ_URL` and other secrets from the environment, following the `${VAR}` rule in the [example config](../examples/config.yaml).
+- HyperMQ reads all settings, including the broker URL and Task credentials, as plain text from its config file. Copy the [example config](../examples/config.yaml) to a gitignored `config.yaml` and set the broker URL to match the Compose credentials (host `rabbitmq`).
 - Never log the broker URL or credentials.
 
 ## Production differences

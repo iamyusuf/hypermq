@@ -12,7 +12,7 @@ hypermq/
 ├── src/
 │   ├── main.rs              # parses role, loads config, wires components, starts/stops them
 │   ├── lib.rs               # re-exports modules so tests and binaries share code
-│   ├── config/              # config model, loader, ${VAR} interpolation, per-role validation
+│   ├── config/              # config model, loader, per-role validation
 │   ├── error.rs             # shared error types
 │   ├── message.rs           # Message, MessageId, RoutingInfo (broker-agnostic)
 │   ├── api/                 # HTTP server: routes, handlers, request validation, auth

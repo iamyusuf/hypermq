@@ -52,6 +52,7 @@ Solid arrows are implemented first; dashed ones are future Task kinds.
 - [docs/traits/](docs/traits/README.md): high-level trait contracts (`Task`, `Broker`, `Publisher`, `TopologyManager`, `RetryPolicy`).
 - [docs/core/consumer-manager.md](docs/core/consumer-manager.md): consumer manager and consumer loop design.
 - [docs/core/deployment.md](docs/core/deployment.md): one binary with `all`/`api`/`consumers` roles; single container first, split later.
+- [docs/core/project-structure.md](docs/core/project-structure.md): planned module layout and dependency rules.
 - `target/`: build output; never edit or commit.
 
 ## Commands

@@ -19,7 +19,15 @@ curl -X POST localhost:8080/publish -H 'content-type: application/json' \
 
 Set `broker.url` in `config.yaml` to `amqp://hypermq:change-me@localhost:5673` to match the Compose broker.
 
-The publish example returns `422 unroutable` until a queue named `jobs` exists; topology is not managed by HyperMQ yet (roadmap Phase 2), so declare it yourself, for example in the management UI at `http://localhost:15673` (user `hypermq`, password `change-me`).
+The publish example returns `422 unroutable` until a queue named `jobs` exists. Declare it in `config.yaml`; HyperMQ creates it at startup:
+
+```yaml
+topology:
+  queues:
+    - name: jobs
+```
+
+You can also create it by hand in the management UI at `http://localhost:15673` (user `hypermq`, password `change-me`).
 
 ## Development environment
 
@@ -103,9 +111,25 @@ docker compose down -v             # stop and delete the RabbitMQ data volume
 
 - The config file is YAML with plain-text values. HyperMQ does not expand environment variables.
 - `config.yaml` in the project root is gitignored; copy values from [docs/examples/config.yaml](../examples/config.yaml). It holds credentials, so never commit it; in production provide it from a secret mount.
-- Only `broker.url` (required, `amqp://` or `amqps://`) and `http_api` (`bind`, `max_body_bytes`) are read today. Other sections in the example are ignored until their phase is implemented.
-- `http_api` rejects unknown keys, so typos there fail at startup.
+- Only `broker.url` (required, `amqp://` or `amqps://`), `http_api` (`bind`, `max_body_bytes`), and `topology` are read today. Other sections in the example are ignored until their phase is implemented.
+- `http_api` and every `topology` entry reject unknown keys, so typos fail at startup.
 - Never log the broker URL or credentials. `broker.url` is held as a secret and redacted in `Debug` output.
+
+### Topology
+
+`topology` lists exchanges, queues, and bindings that HyperMQ declares at startup, in that order, in every role. See [docs/examples/config.yaml](../examples/config.yaml) and [topology.md](../traits/topology.md).
+
+| Entity | Fields |
+|---|---|
+| `exchanges[]` | `name`, `kind` (`direct`, `fanout`, `topic`), `durable` (default `true`) |
+| `queues[]` | `name`, `durable` (default `true`), `dead_letter_exchange`, `dead_letter_routing_key`, `message_ttl` (for example `30s`) |
+| `bindings[]` | `queue`, `exchange`, `routing_key` (default empty) |
+
+- Names use letters, digits, `-`, `_`, `.`, `:` (at most 255 bytes). Declared names cannot start with `amq.`. Duplicates and invalid values fail config load, before any connection is made.
+- Declarations are idempotent: re-declaring identical settings succeeds. If an exchange or queue already exists with different settings, startup fails with the broker's reason; nothing is altered or deleted.
+- A binding fails if its queue or exchange does not exist. Bindings may target exchanges not listed in the config (for example `amq.topic`).
+- If `topology` is empty no connection is made at startup. If it is set and RabbitMQ is unreachable, startup fails, unlike publishing, which tolerates an unreachable broker.
+- RabbitMQ 4 rejects non-durable, non-exclusive queues, so keep queues durable there.
 
 CLI options (each also has an environment variable):
 
@@ -138,8 +162,9 @@ Run format, lint, and unit tests before committing.
 | `src/config/` | Config model, YAML loader, validation, `Role`. |
 | `src/error.rs` | Shared `Error` and `ConfigError`. No dependency on other project modules. |
 | `src/api/` | Axum router, handlers, request validation, `ApiError`, JSON extractor. |
-| `src/broker/mod.rs` | `Publisher` trait and its request/error types. |
-| `src/broker/rabbitmq/` | `RabbitPublisher`. The only code that imports `lapin`. |
+| `src/broker/mod.rs` | `Publisher` trait, its request/error types, and shared name validation. |
+| `src/broker/topology.rs` | Topology config types, validation, `TopologyManager` trait, and `apply`. |
+| `src/broker/rabbitmq/` | `RabbitPublisher` and `RabbitTopology`. The only code that imports `lapin`. |
 | `tests/rabbitmq.rs` | Integration tests that need RabbitMQ. |
 
 Dependency rules:
@@ -211,7 +236,10 @@ sequenceDiagram
 | `ACCESS_REFUSED - Login was refused` at startup | The broker rejects the credentials in `broker.url`. Fix the user and password, or use the Compose broker. |
 | `POST /publish` returns `503 broker_unavailable` | RabbitMQ is down or unreachable; the client should retry. HyperMQ reconnects on the next request. |
 | `POST /publish` returns `422 unroutable` | No queue received the message: the queue does not exist, or the exchange has no matching binding. |
-| `POST /publish` returns `404 target_not_found` | The exchange does not exist. |
+| `POST /publish` returns `404 target_not_found` | The exchange does not exist. Declare it under `topology`. |
+| Startup fails with `topology: ... conflicts with an existing declaration` | The exchange or queue exists with different settings (for example another `message_ttl`). Match the existing settings, or delete the entity on the broker if it is disposable. |
+| Startup fails with `topology: ... refers to something that does not exist` | A binding names a queue or exchange that is neither in `topology` nor on the broker. |
+| Startup fails with `topology: broker unavailable` | RabbitMQ is unreachable. Start it or fix `broker.url`. |
 | `cannot read config file` | No `config.yaml` in the working directory; pass `--config` or create one. |
 | Integration test fails with `transient_nonexcl_queues` | Declare the queue as durable. |
 

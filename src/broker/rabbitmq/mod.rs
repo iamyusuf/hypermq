@@ -10,6 +10,10 @@ use tokio::sync::Mutex;
 
 use super::{PublishError, PublishRequest, PublishTarget, Publisher};
 
+mod topology;
+
+pub use topology::RabbitTopology;
+
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const CONFIRM_TIMEOUT: Duration = Duration::from_secs(5);
 const PERSISTENT: u8 = 2;
@@ -61,16 +65,9 @@ impl RabbitPublisher {
             close(stale.connection);
         }
 
-        let connection = tokio::time::timeout(
-            CONNECT_TIMEOUT,
-            Connection::connect(
-                self.url.expose_secret(),
-                ConnectionProperties::default().with_connection_name("hypermq".into()),
-            ),
-        )
-        .await
-        .map_err(|_| PublishError::Unavailable("connect timed out".into()))?
-        .map_err(unavailable)?;
+        let connection = connect(&self.url)
+            .await
+            .map_err(PublishError::Unavailable)?;
 
         let channel = match open_channel(&connection).await {
             Ok(channel) => channel,
@@ -153,6 +150,20 @@ impl Publisher for RabbitPublisher {
             }
         }
     }
+}
+
+/// Opens a connection; the error text never contains the URL.
+async fn connect(url: &SecretString) -> Result<Connection, String> {
+    tokio::time::timeout(
+        CONNECT_TIMEOUT,
+        Connection::connect(
+            url.expose_secret(),
+            ConnectionProperties::default().with_connection_name("hypermq".into()),
+        ),
+    )
+    .await
+    .map_err(|_| "connect timed out".to_owned())?
+    .map_err(|err| err.to_string())
 }
 
 async fn open_channel(connection: &Connection) -> Result<Channel, PublishError> {

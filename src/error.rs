@@ -12,9 +12,25 @@ pub enum ConfigError {
 }
 
 #[derive(Debug, thiserror::Error)]
+pub enum TopologyError {
+    #[error("broker unavailable: {0}")]
+    Unavailable(String),
+    /// Re-declaring with different settings than the existing entity.
+    #[error("{what} conflicts with an existing declaration: {message}")]
+    Conflict { what: String, message: String },
+    /// A binding or dead-letter target that does not exist.
+    #[error("{what} refers to something that does not exist: {message}")]
+    NotFound { what: String, message: String },
+    #[error("broker refused {what}: {message}")]
+    Refused { what: String, message: String },
+}
+
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
     Config(#[from] ConfigError),
+    #[error("topology: {0}")]
+    Topology(#[from] TopologyError),
     #[error("io error: {0}")]
     Io(#[from] io::Error),
 }

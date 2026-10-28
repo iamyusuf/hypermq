@@ -9,10 +9,11 @@ use uuid::Uuid;
 
 use super::json::ApiJson;
 use super::{ApiError, AppState};
-use crate::broker::{PublishRequest, PublishTarget};
+use crate::broker::{
+    MAX_NAME_LEN, MAX_ROUTING_KEY_LEN, PublishRequest, PublishTarget, is_valid_name,
+    is_valid_routing_key,
+};
 
-const MAX_NAME_LEN: usize = 255;
-const MAX_ROUTING_KEY_LEN: usize = 255;
 const MAX_MESSAGE_ID_LEN: usize = 255;
 const MAX_HEADERS: usize = 32;
 const MAX_HEADER_KEY_LEN: usize = 128;
@@ -93,14 +94,9 @@ fn invalid<T>(message: &str) -> Result<T, ApiError> {
     Err(ApiError::InvalidRequest(message.into()))
 }
 
-/// Exchange and queue names: letters, digits, and `-_.:` only, at most 255 bytes.
+/// Exchange and queue names: see `broker::is_valid_name`.
 fn check_name(field: &str, name: &str) -> Result<(), ApiError> {
-    let ok = !name.is_empty()
-        && name.len() <= MAX_NAME_LEN
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b':'));
-    if ok {
+    if is_valid_name(name) {
         Ok(())
     } else {
         Err(ApiError::InvalidRequest(format!(
@@ -110,7 +106,7 @@ fn check_name(field: &str, name: &str) -> Result<(), ApiError> {
 }
 
 fn check_routing_key(key: &str) -> Result<(), ApiError> {
-    if key.len() <= MAX_ROUTING_KEY_LEN && !key.chars().any(char::is_control) {
+    if is_valid_routing_key(key) {
         Ok(())
     } else {
         Err(ApiError::InvalidRequest(format!(

@@ -4,7 +4,7 @@ HyperMQ is an HTTP wrapper around RabbitMQ. It also lets operators configure con
 
 ## Status
 
-Phase 0 (foundation) is implemented: YAML config loader (plain-text values, no variable interpolation), `--role` flag, tracing, typed errors, and `GET /health`. Phase 1 (publish over HTTP) is implemented: `POST /publish` with a lapin-based `Publisher` (lazy reconnect, publisher confirms, mandatory publishes). Nothing else exists yet (no topology management, tasks, or consumers); the rest describes the intended design, so update this file as it is implemented.
+Phase 0 (foundation) is implemented: YAML config loader (plain-text values, no variable interpolation), `--role` flag, tracing, typed errors, and `GET /health`. Phase 1 (publish over HTTP) is implemented: `POST /publish` with a lapin-based `Publisher` (lazy reconnect, publisher confirms, mandatory publishes). Phase 2 (topology) is implemented: exchanges, queues, and bindings declared from the `topology` config section at startup. Nothing else exists yet (no topology management endpoints, tasks, or consumers); the rest describes the intended design, so update this file as it is implemented.
 
 ## Concept
 
@@ -47,7 +47,7 @@ Solid arrows are implemented first; dashed ones are future Task kinds.
 
 - [src/main.rs](src/main.rs): entry point.
 - [src/api/](src/api/mod.rs): HTTP routes (`/health`, `/publish`), request validation, stable `ApiError` responses.
-- [src/broker/](src/broker/mod.rs): `Publisher` trait and types; [src/broker/rabbitmq/](src/broker/rabbitmq/mod.rs) is the only code that imports lapin.
+- [src/broker/](src/broker/mod.rs): `Publisher` trait and types; [src/broker/topology.rs](src/broker/topology.rs): topology types and `TopologyManager`; [src/broker/rabbitmq/](src/broker/rabbitmq/mod.rs) is the only code that imports lapin.
 - [tests/rabbitmq.rs](tests/rabbitmq.rs): integration tests that need RabbitMQ (ignored by default).
 - Planned modules: consumer engine, and a `tasks` module with the `Task` trait plus one submodule per kind (`tasks/http` first).
 - [docs/api/publish.md](docs/api/publish.md): publish endpoint reference.

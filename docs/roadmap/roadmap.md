@@ -23,8 +23,8 @@ Exit: a client can publish via HTTP and the message lands in RabbitMQ; invalid i
 ## Phase 2: Topology management
 
 - Declare exchanges, queues, and bindings from configuration at startup.
-- Optionally expose management endpoints for the same operations.
-- Support dead-letter exchanges and queue arguments needed by the retry policy.
+- Optionally expose management endpoints for the same operations (not implemented; revisit if runtime changes are needed, see Phase 7).
+- Support dead-letter exchanges and queue arguments needed by the retry policy (`dead_letter_exchange`, `dead_letter_routing_key`, `message_ttl`).
 
 Exit: topology in configuration is created idempotently; conflicting declarations fail with a clear error.
 

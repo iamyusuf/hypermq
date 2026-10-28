@@ -9,6 +9,9 @@ http_api:
   bind: 0.0.0.0:8080
   max_body_bytes: 1048576
 
+# Declared at startup (exchanges, then queues, then bindings). Re-declaring identical settings is a
+# no-op; a conflicting existing entity fails startup. `durable` defaults to true. Optional queue
+# settings: dead_letter_exchange, dead_letter_routing_key, message_ttl (for example 30s).
 topology:
   exchanges:
     - name: orders

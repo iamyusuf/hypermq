@@ -1,9 +1,27 @@
 pub mod rabbitmq;
+pub mod topology;
 
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 use bytes::Bytes;
+
+pub const MAX_NAME_LEN: usize = 255;
+pub const MAX_ROUTING_KEY_LEN: usize = 255;
+
+/// Exchange and queue names: letters, digits, and `-_.:` only, at most 255 bytes.
+pub fn is_valid_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= MAX_NAME_LEN
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b':'))
+}
+
+/// Routing keys and binding patterns: at most 255 bytes, no control characters; may be empty.
+pub fn is_valid_routing_key(key: &str) -> bool {
+    key.len() <= MAX_ROUTING_KEY_LEN && !key.chars().any(char::is_control)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PublishTarget {

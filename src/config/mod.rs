@@ -5,6 +5,7 @@ use clap::ValueEnum;
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 
+use crate::broker::topology::Topology;
 use crate::error::ConfigError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -29,6 +30,8 @@ pub struct Config {
     pub broker: BrokerConfig,
     #[serde(default)]
     pub http_api: HttpApiConfig,
+    #[serde(default)]
+    pub topology: Topology,
 }
 
 #[derive(Debug, Deserialize)]
@@ -71,7 +74,7 @@ impl Config {
         Self::from_yaml(&text)
     }
 
-    /// Sections for later phases (topology, consumers) are ignored until they are implemented.
+    /// Sections for later phases (consumers) are ignored until they are implemented.
     pub fn from_yaml(text: &str) -> Result<Self, ConfigError> {
         let config: Config = serde_yaml_ng::from_str(text)?;
         config.validate()?;
@@ -85,6 +88,7 @@ impl Config {
                 "broker.url must start with amqp:// or amqps://".into(),
             ));
         }
+        self.topology.validate().map_err(ConfigError::Invalid)?;
         Ok(())
     }
 }
@@ -128,6 +132,24 @@ mod tests {
     fn rejects_unknown_http_api_key() {
         let yaml = "broker:\n  url: amqp://x\nhttp_api:\n  bnd: 0.0.0.0:1\n";
         assert!(Config::from_yaml(yaml).is_err());
+    }
+
+    #[test]
+    fn example_config_is_valid() {
+        let cfg = Config::from_yaml(include_str!("../../docs/examples/config.yaml")).unwrap();
+        assert!(!cfg.topology.is_empty());
+    }
+
+    #[test]
+    fn invalid_topology_fails_config_load() {
+        let yaml = format!("{MINIMAL}topology:\n  queues: [{{name: 'bad name'}}]\n");
+        let err = Config::from_yaml(&yaml).unwrap_err();
+        assert!(matches!(err, ConfigError::Invalid(msg) if msg.contains("queues[0].name")));
+    }
+
+    #[test]
+    fn topology_defaults_to_empty() {
+        assert!(Config::from_yaml(MINIMAL).unwrap().topology.is_empty());
     }
 
     #[test]

@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use clap::Parser;
 use hypermq::api::{self, AppState};
-use hypermq::broker::rabbitmq::RabbitPublisher;
+use hypermq::broker::rabbitmq::{RabbitPublisher, RabbitTopology};
+use hypermq::broker::topology;
 use hypermq::config::{Config, Role};
 use hypermq::error::Error;
 use tracing_subscriber::EnvFilter;
@@ -41,6 +42,14 @@ async fn main() -> ExitCode {
 
 async fn run(cli: Cli) -> Result<(), Error> {
     let config = Config::load(&cli.config)?;
+
+    // Fails startup when declared topology cannot be created or conflicts with the broker.
+    if !config.topology.is_empty() {
+        let manager = RabbitTopology::connect(&config.broker.url).await?;
+        let result = topology::apply(&manager, &config.topology).await;
+        manager.close().await;
+        result?;
+    }
 
     let publisher = Arc::new(RabbitPublisher::new(config.broker.url));
     if cli.role != Role::Consumers

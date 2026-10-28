@@ -23,6 +23,11 @@ pub enum Decision {
 | `Retryable` | attempts exhausted | `DeadLetter` |
 | `Permanent` | always | `DeadLetter` |
 
+## Attempt counting
+
+- The first delivery is attempt 1. Each retry increments the attempt, carried in the `x-hypermq-attempt` header on the message.
+- `Retry` is decided only when `attempt < max_attempts`, so with `max_attempts: 3` a message runs at most three times before dead-lettering.
+
 ## Contract
 
 - Pure and synchronous: no I/O, easy to unit test.

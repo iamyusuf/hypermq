@@ -12,6 +12,9 @@ use crate::message::Message;
 pub const MAX_NAME_LEN: usize = 255;
 pub const MAX_ROUTING_KEY_LEN: usize = 255;
 
+/// Header HyperMQ sets on every retry to carry the attempt number. Publishers may not use it.
+pub const ATTEMPT_HEADER: &str = "x-hypermq-attempt";
+
 /// Exchange and queue names: letters, digits, and `-_.:` only, at most 255 bytes.
 pub fn is_valid_name(name: &str) -> bool {
     !name.is_empty()

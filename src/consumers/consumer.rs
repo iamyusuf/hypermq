@@ -37,6 +37,10 @@ impl Consumer {
         }
     }
 
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
     /// Consumes until the subscription ends or fails, then waits for in-flight deliveries to settle.
     /// An error means the caller decides whether to resubscribe.
     pub async fn run(&self, broker: &dyn Broker) -> Result<(), BrokerError> {

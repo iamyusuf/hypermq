@@ -1212,6 +1212,7 @@ dependencies = [
  "axum",
  "bytes",
  "clap",
+ "futures-lite",
  "http-body-util",
  "humantime-serde",
  "lapin",

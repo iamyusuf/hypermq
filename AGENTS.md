@@ -4,7 +4,7 @@ HyperMQ is an HTTP wrapper around RabbitMQ. It also lets operators configure con
 
 ## Status
 
-Phase 0 (foundation) is implemented: YAML config loader (plain-text values, no variable interpolation), `--role` flag, tracing, typed errors, and `GET /health`. Phase 1 (publish over HTTP) is implemented: `POST /publish` with a lapin-based `Publisher` (lazy reconnect, publisher confirms, mandatory publishes). Phase 2 (topology) is implemented: exchanges, queues, and bindings declared from the `topology` config section at startup. Nothing else exists yet (no topology management endpoints, tasks, or consumers); the rest describes the intended design, so update this file as it is implemented.
+Phase 0 (foundation) is implemented: YAML config loader (plain-text values, no variable interpolation), `--role` flag, tracing, typed errors, and `GET /health`. Phase 1 (publish over HTTP) is implemented: `POST /publish` with a lapin-based `Publisher` (lazy reconnect, publisher confirms, mandatory publishes). Phase 2 (topology) is implemented: exchanges, queues, and bindings declared from the `topology` config section at startup. Phase 3 (Task abstraction and consumer engine) is implemented: RabbitMQ consume side with ack, bounded retry through a per-queue retry queue, and dead-lettering; consumer reconnect is not yet implemented (Phase 5). Phase 4 (HTTP Task) is implemented: `type: http` with `allowed_hosts`, outcome mapping, and an end-to-end test through `POST /publish`. Not yet implemented: topology management endpoints, consumer reconnect, metrics, and Task kinds beyond HTTP. The rest describes the intended design, so update this file as it is implemented.
 
 ## Concept
 
@@ -49,7 +49,8 @@ Solid arrows are implemented first; dashed ones are future Task kinds.
 - [src/api/](src/api/mod.rs): HTTP routes (`/health`, `/publish`), request validation, stable `ApiError` responses.
 - [src/broker/](src/broker/mod.rs): `Publisher` trait and types; [src/broker/topology.rs](src/broker/topology.rs): topology types and `TopologyManager`; [src/broker/rabbitmq/](src/broker/rabbitmq/mod.rs) is the only code that imports lapin.
 - [tests/rabbitmq.rs](tests/rabbitmq.rs): integration tests that need RabbitMQ (ignored by default).
-- Planned modules: consumer engine, and a `tasks` module with the `Task` trait plus one submodule per kind (`tasks/http` first).
+- [src/consumers/](src/consumers/mod.rs): consumer config, retry settings, and the consumer engine (`Consumer`). It depends only on the `Broker`, `Task`, and `RetryPolicy` abstractions.
+- [src/tasks/](src/tasks/mod.rs): the `Task` trait, `TaskFactory`, and `TaskRegistry`; [src/tasks/http/](src/tasks/http/mod.rs) is the first kind (behind the `task-http` feature).
 - [docs/api/publish.md](docs/api/publish.md): publish endpoint reference.
 - [docs/](docs/): design and API documentation.
 - [docs/roadmap/roadmap.md](docs/roadmap/roadmap.md): phase-by-phase plan; follow its order and exit criteria.

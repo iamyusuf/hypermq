@@ -10,8 +10,8 @@ use uuid::Uuid;
 use super::json::ApiJson;
 use super::{ApiError, AppState};
 use crate::broker::{
-    MAX_NAME_LEN, MAX_ROUTING_KEY_LEN, PublishRequest, PublishTarget, is_valid_name,
-    is_valid_routing_key,
+    ATTEMPT_HEADER, MAX_NAME_LEN, MAX_ROUTING_KEY_LEN, PublishRequest, PublishTarget,
+    is_valid_name, is_valid_routing_key,
 };
 
 const MAX_MESSAGE_ID_LEN: usize = 255;
@@ -141,6 +141,11 @@ fn check_headers(headers: &BTreeMap<String, String>) -> Result<(), ApiError> {
                 "header names must be 1-{MAX_HEADER_KEY_LEN} visible ASCII characters"
             )));
         }
+        if key.eq_ignore_ascii_case(ATTEMPT_HEADER) {
+            return Err(ApiError::InvalidRequest(format!(
+                "header `{ATTEMPT_HEADER}` is reserved"
+            )));
+        }
         if value.len() > MAX_HEADER_VALUE_LEN {
             return Err(ApiError::InvalidRequest(format!(
                 "header values must be at most {MAX_HEADER_VALUE_LEN} bytes"
@@ -249,6 +254,14 @@ mod tests {
 
         let msg = invalid_message(json!({ "queue": "q", "headers": { "": "v" }, "payload": 1 }));
         assert!(msg.contains("header names"));
+    }
+
+    #[test]
+    fn reserved_attempt_header_is_rejected() {
+        let msg = invalid_message(
+            json!({ "queue": "q", "headers": { "X-HyperMQ-Attempt": "9" }, "payload": 1 }),
+        );
+        assert!(msg.contains("reserved"));
     }
 
     #[test]

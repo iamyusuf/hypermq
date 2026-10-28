@@ -65,6 +65,8 @@ Each consumer runs this loop. It is the "consumer engine" referred to elsewhere 
 
 Ack happens only after the Task returned `Success`. A message is never requeued indefinitely.
 
+Status: Phase 3 implements steps 1 to 4 and shutdown. Step 5 (reconnect with backoff) is Phase 5; until then a stream error stops that consumer and is logged.
+
 ## Lifecycle
 
 ```mermaid

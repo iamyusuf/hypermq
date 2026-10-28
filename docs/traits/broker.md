@@ -55,6 +55,14 @@ pub trait Delivery: Send {
 
 - Ack/nack happens only through `Delivery`, and only from the consumer engine.
 - Redelivery must never loop forever: the attempt count travels with the message and `RetryPolicy` bounds it.
-- Reconnect handling lives in the implementation; the stream yields an error and the engine resubscribes.
+- Reconnect handling lives in the implementation; the stream yields an error and the engine resubscribes. The RabbitMQ implementation does not reconnect yet (Phase 5); a stream error ends the consumer.
+
+### RabbitMQ implementation
+
+- `consume` declares a durable retry queue `<queue>.retry` for the work queue, with `x-dead-letter-exchange` set to the default exchange and `x-dead-letter-routing-key` set to the work queue. Retry messages return to the work queue when their per-message `expiration` elapses.
+- `retry(delay)` publishes a copy to the retry queue with the attempt header incremented, waits for the publisher confirm, then acks the original. Retries are therefore only as durable as the confirm.
+- Per-message TTL expires in queue order, so a long delay on one message can hold back shorter ones behind it on the same retry queue (head-of-line blocking).
+- `reject` dead-letters only if the work queue has `dead_letter_exchange` set. Declare it in `topology`; without it, rejected messages are dropped.
+- The attempt count travels in the `x-hypermq-attempt` header. Publishers cannot set it (the publish API rejects it), and a missing header means attempt 1.
 - Credentials and the broker URL are never logged.
 - The RabbitMQ implementation is the only code that imports the AMQP client.

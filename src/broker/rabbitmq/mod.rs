@@ -10,8 +10,10 @@ use tokio::sync::Mutex;
 
 use super::{PublishError, PublishRequest, PublishTarget, Publisher};
 
+mod consume;
 mod topology;
 
+pub use consume::RabbitBroker;
 pub use topology::RabbitTopology;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);

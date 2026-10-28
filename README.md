@@ -48,6 +48,5 @@ Publishing needs a reachable RabbitMQ (`broker.url` in the config file); without
 - [Consumer manager](docs/core/consumer-manager.md): consumer lifecycle and loop.
 - [Deployment](docs/core/deployment.md): roles and container layout.
 - [Project structure](docs/core/project-structure.md): planned modules and dependency rules.
-- [Developer guide](docs/dev/developer-guide.md): build, run, test, code map, and contribution workflow.
-- [Development environment](docs/dev/devenv.md): Docker and Compose setup with a local RabbitMQ.
+- [Developer guide](docs/dev/developer-guide.md): setup, Docker and Compose development environment, build, run, test, and code map.
 - [AGENTS.md](AGENTS.md): conventions for AI coding agents and open design questions.

@@ -1,6 +1,6 @@
 # Developer guide
 
-How to build, run, test, and extend HyperMQ. For the design see [AGENTS.md](../../AGENTS.md), the [roadmap](../roadmap/roadmap.md), and [project-structure.md](../core/project-structure.md).
+How to set up, build, run, test, and extend HyperMQ, including the Docker development environment. For the design see [AGENTS.md](../../AGENTS.md), the [roadmap](../roadmap/roadmap.md), and [project-structure.md](../core/project-structure.md).
 
 ## Prerequisites
 
@@ -10,21 +10,102 @@ How to build, run, test, and extend HyperMQ. For the design see [AGENTS.md](../.
 ## Quick start
 
 ```sh
-docker compose up -d rabbitmq          # RabbitMQ on host port 5673 (see devenv.md)
+docker compose up -d rabbitmq          # RabbitMQ on host port 5673
 cargo run                              # reads ./config.yaml
 curl localhost:8080/health
 curl -X POST localhost:8080/publish -H 'content-type: application/json' \
   -d '{"queue":"jobs","payload":{"hello":"world"}}'
 ```
 
-The publish example returns `422 unroutable` until a queue named `jobs` exists; topology is not managed by HyperMQ yet (roadmap Phase 2), so declare it yourself (for example in the management UI on `http://localhost:15673`, user `hypermq`, password `change-me`).
+Set `broker.url` in `config.yaml` to `amqp://hypermq:change-me@localhost:5673` to match the Compose broker.
+
+The publish example returns `422 unroutable` until a queue named `jobs` exists; topology is not managed by HyperMQ yet (roadmap Phase 2), so declare it yourself, for example in the management UI at `http://localhost:15673` (user `hypermq`, password `change-me`).
+
+## Development environment
+
+The Compose file provides a local RabbitMQ for development only; production uses a dedicated RabbitMQ that HyperMQ reaches through configuration. Only the `rabbitmq` service exists in [docker-compose.yml](../../docker-compose.yml) today; the HyperMQ image and service are planned.
+
+### Principles
+
+- The HyperMQ image is the same artifact in development and production. Only configuration differs.
+- The Compose RabbitMQ is a development convenience. Nothing in the code may assume the broker is local or managed by Compose.
+- The broker is selected only by `broker.url` in the config file. Topology is declared by HyperMQ (see [TopologyManager](../traits/topology.md)), so it works against any empty RabbitMQ.
+- Development credentials are for local use only and are never reused elsewhere.
+
+### Services
+
+| Service | Image | Purpose | Host ports | Status |
+|---|---|---|---|---|
+| `rabbitmq` | `rabbitmq:4-management` | Local broker with management UI | `5673` (AMQP), `15673` (UI) | In `docker-compose.yml` |
+| `hypermq` | built from `Dockerfile` | The application | `8080` (HTTP API) | Planned |
+
+The host ports `5673` and `15673` avoid clashing with a RabbitMQ already bound to `5672`/`15672`. Inside the Compose network the broker still listens on `5672`.
+
+The default user is `hypermq` with password `change-me`; override with `RABBITMQ_USER` and `RABBITMQ_PASS` in a local `.env` file (read by Compose for the RabbitMQ container only).
+
+```mermaid
+flowchart LR
+    Dev[Developer] -->|HTTP :8080| H[hypermq]
+    Dev -->|UI :15673| R[(rabbitmq container)]
+    H -->|AMQP :5673 from host, rabbitmq:5672 in Compose| R
+```
+
+### Two ways to work
+
+1. **App on the host, RabbitMQ in Docker** (fast iteration; available now). Start only the broker, then `cargo run`; the app connects to `localhost:5673`.
+2. **Everything in Docker** (closest to production; planned). Compose builds the image and runs both services; the app connects to `rabbitmq:5672` over the Compose network.
+
+### Planned `hypermq` service (sketch)
+
+```yaml
+  hypermq:
+    build: .
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config.yaml:/etc/hypermq/config.yaml:ro
+    command: ["--role", "all", "--config", "/etc/hypermq/config.yaml"]
+```
+
+- In this setup `broker.url` in `config.yaml` must use host `rabbitmq` and port `5672`.
+- The healthcheck on `rabbitmq` lets `hypermq` wait for the broker instead of failing at startup.
+- The default `guest` user only works from localhost inside the container, so the Compose broker uses an explicit user.
+
+### Planned Dockerfile (sketch)
+
+- Multi-stage build: a Rust builder stage compiles `cargo build --release`, and a slim runtime stage copies only the binary.
+- Cache dependencies in a separate layer so source changes do not rebuild them.
+- Run as a non-root user and do not bake config or secrets into the image.
+- Task features (for example `task-http`) are chosen at build time through build arguments.
+
+### Production differences
+
+| | Development | Production |
+|---|---|---|
+| RabbitMQ | Compose service, throwaway data volume | Dedicated, managed separately |
+| Connection | `amqp://` to the Compose broker | `amqps://` (TLS) to the dedicated host |
+| Credentials | Local values | Secret store or orchestrator secrets mounted as the config file |
+| Compose file | Used | Not used; the image is deployed by the production orchestrator |
+| Management UI | Exposed on `15673` | Not exposed publicly |
+
+### Docker commands
+
+```sh
+docker compose up -d rabbitmq      # broker only, run the app with cargo
+docker compose down                # stop, keep data
+docker compose down -v             # stop and delete the RabbitMQ data volume
+```
 
 ## Configuration
 
 - The config file is YAML with plain-text values. HyperMQ does not expand environment variables.
-- `config.yaml` in the project root is gitignored; copy values from [docs/examples/config.yaml](../examples/config.yaml). Never commit real credentials.
+- `config.yaml` in the project root is gitignored; copy values from [docs/examples/config.yaml](../examples/config.yaml). It holds credentials, so never commit it; in production provide it from a secret mount.
 - Only `broker.url` (required, `amqp://` or `amqps://`) and `http_api` (`bind`, `max_body_bytes`) are read today. Other sections in the example are ignored until their phase is implemented.
 - `http_api` rejects unknown keys, so typos there fail at startup.
+- Never log the broker URL or credentials. `broker.url` is held as a secret and redacted in `Debug` output.
 
 CLI options (each also has an environment variable):
 
@@ -99,7 +180,7 @@ sequenceDiagram
 1. Add the field to the types in `src/config/mod.rs` with a `#[serde(default)]` where a default makes sense.
 2. Validate it in `Config::validate` if it has constraints.
 3. Add a unit test next to the existing ones.
-4. Update [docs/examples/config.yaml](../examples/config.yaml) and the table above.
+4. Update [docs/examples/config.yaml](../examples/config.yaml) and the configuration section above.
 
 ### A new broker operation
 
@@ -109,16 +190,16 @@ sequenceDiagram
 
 ## Testing
 
-- **Unit tests** sit next to the code in `#[cfg(test)]` modules. API tests use `tower::ServiceExt::oneshot` with a fake `Publisher`; no network is needed.
-- **Integration tests** in `tests/` are `#[ignore]`d so a plain `cargo test` never needs RabbitMQ. They create uniquely named queues and exchanges and delete them afterwards.
+- **Unit tests** sit next to the code in `#[cfg(test)]` modules and do not need Docker. API tests use `tower::ServiceExt::oneshot` with a fake `Publisher`.
+- **Integration tests** in `tests/` are `#[ignore]`d so a plain `cargo test` never needs RabbitMQ. They run against the Compose broker, create uniquely named queues and exchanges, and delete them afterwards.
 - RabbitMQ 4 rejects transient non-exclusive queues, so declare test queues as durable and delete them at the end.
-- If another RabbitMQ already uses port 5672 on your machine, use the Compose one on 5673 or start a throwaway container: `docker run -d --rm --name hypermq-test-rabbit -p 5673:5672 rabbitmq:4`.
+- For a throwaway broker instead of Compose: `docker run -d --rm --name hypermq-test-rabbit -p 5673:5672 rabbitmq:4`.
+- CI will start RabbitMQ as a service container or through Compose before the integration suite (roadmap Phase 5).
 
 ## Conventions
 
 - Keep changes minimal; do not add features or dependencies that were not requested.
 - Return typed errors; no `unwrap()`/`expect()` on code paths that handle requests or messages.
-- Never log the broker URL or credentials. `broker.url` is held as a secret and redacted in `Debug` output.
 - Keep HTTP handlers thin; put broker logic in `broker/`.
 - Add tests with new behavior and keep integration tests separate.
 - Document new endpoints and options in `docs/`.
@@ -133,3 +214,9 @@ sequenceDiagram
 | `POST /publish` returns `404 target_not_found` | The exchange does not exist. |
 | `cannot read config file` | No `config.yaml` in the working directory; pass `--config` or create one. |
 | Integration test fails with `transient_nonexcl_queues` | Declare the queue as durable. |
+
+## Open questions
+
+- Whether to add a small local downstream service to Compose for testing the HTTP Task.
+- Whether to pin the RabbitMQ image to an exact version to match production.
+- Whether a pre-provisioned definitions file should load users, vhosts, or queues, or whether HyperMQ topology declaration alone is enough.

@@ -1,6 +1,14 @@
 # Development environment
 
-The project is containerized. A Docker Compose file provides a local RabbitMQ for development only; production is expected to use a dedicated RabbitMQ that HyperMQ reaches through configuration. These files are planned, not created yet.
+The project is containerized. A Docker Compose file provides a local RabbitMQ for development only; production is expected to use a dedicated RabbitMQ that HyperMQ reaches through configuration. The `rabbitmq` service exists in [docker-compose.yml](../../docker-compose.yml); the HyperMQ image and the `hypermq` service below are still planned.
+
+## Quick start
+
+```sh
+docker compose up -d rabbitmq
+```
+
+AMQP is on host port `5673` and the management UI on `15673` (chosen to avoid clashing with a RabbitMQ already on 5672). The default user is `hypermq` with password `change-me`; override with `RABBITMQ_USER` and `RABBITMQ_PASS` in a `.env` file. Set `broker.url` in `config.yaml` to match, for example `amqp://hypermq:change-me@localhost:5673`.
 
 ## Principles
 

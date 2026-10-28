@@ -1,0 +1,21 @@
+# Development only: a local RabbitMQ for HyperMQ. Production uses a dedicated broker.
+services:
+  rabbitmq:
+    image: rabbitmq:4-management
+    ports:
+      # Host ports avoid clashing with a RabbitMQ already bound to 5672/15672.
+      - "5673:5672"
+      - "15673:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-hypermq}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-change-me}
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  rabbitmq-data:

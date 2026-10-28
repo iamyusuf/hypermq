@@ -1,0 +1,49 @@
+# Illustrative config; the format is not final (see "Open design questions" in AGENTS.md).
+# Values like ${VAR} are read from the environment so secrets stay out of the file.
+
+broker:
+  url: ${RABBITMQ_URL}
+
+http_api:
+  bind: 0.0.0.0:8080
+  max_body_bytes: 1048576
+
+topology:
+  exchanges:
+    - name: orders
+      kind: topic
+      durable: true
+    - name: orders.dlx
+      kind: fanout
+      durable: true
+  queues:
+    - name: orders.created
+      durable: true
+      dead_letter_exchange: orders.dlx
+    - name: orders.created.dead
+      durable: true
+  bindings:
+    - queue: orders.created
+      exchange: orders
+      routing_key: order.created
+    - queue: orders.created.dead
+      exchange: orders.dlx
+      routing_key: ""
+
+consumers:
+  - name: notify-billing
+    queue: orders.created
+    prefetch: 10
+    retry:
+      max_attempts: 5
+      base_delay: 5s
+      backoff: exponential
+      max_delay: 5m
+    task:
+      type: http
+      method: POST
+      url: https://billing.internal.example.com/api/orders
+      timeout: 10s
+      headers:
+        Authorization: Bearer ${BILLING_API_TOKEN}
+      idempotency_header: Idempotency-Key   # filled with the stable message id

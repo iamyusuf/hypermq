@@ -51,6 +51,7 @@ Solid arrows are implemented first; dashed ones are future Task kinds.
 - [docs/roadmap/roadmap.md](docs/roadmap/roadmap.md): phase-by-phase plan; follow its order and exit criteria.
 - [docs/traits/](docs/traits/README.md): high-level trait contracts (`Task`, `Broker`, `Publisher`, `TopologyManager`, `RetryPolicy`).
 - [docs/core/consumer-manager.md](docs/core/consumer-manager.md): consumer manager and consumer loop design.
+- [docs/core/deployment.md](docs/core/deployment.md): one binary with `all`/`api`/`consumers` roles; single container first, split later.
 - `target/`: build output; never edit or commit.
 
 ## Commands

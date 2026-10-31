@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::path::Path;
+use std::time::Duration;
 
 use clap::ValueEnum;
 use secrecy::{ExposeSecret, SecretString};
@@ -35,11 +36,115 @@ pub struct Config {
     pub topology: Topology,
     #[serde(default)]
     pub consumers: Vec<ConsumerConfig>,
+    /// When set, publishes that RabbitMQ cannot take are stored in this database and relayed later.
+    #[serde(default)]
+    pub outbox: Option<OutboxConfig>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct BrokerConfig {
     pub url: SecretString,
+}
+
+/// Persistent fallback for publishes made while RabbitMQ is unavailable. See `docs/roadmap/roadmap.md`, Phase 8.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutboxConfig {
+    /// `postgres://`, `postgresql://`, or `mysql://`. Treated as a secret.
+    pub database_url: SecretString,
+    /// Rows held before publishes return `503`.
+    #[serde(default = "default_outbox_max_messages")]
+    pub max_messages: u64,
+    /// Rows older than this move to the dead-letter table.
+    #[serde(default = "default_outbox_max_age", with = "humantime_serde")]
+    pub max_age: Duration,
+    /// Pause between relay cycles.
+    #[serde(default = "default_outbox_cooldown", with = "humantime_serde")]
+    pub cooldown: Duration,
+    /// Failed publishes of an unroutable message before it is dead-lettered.
+    #[serde(default = "default_outbox_max_attempts")]
+    pub max_attempts: u32,
+    /// Delay before the first retry; doubles on each failure.
+    #[serde(default = "default_outbox_retry_base_delay", with = "humantime_serde")]
+    pub retry_base_delay: Duration,
+    /// Upper bound for the retry delay.
+    #[serde(default = "default_outbox_retry_max_delay", with = "humantime_serde")]
+    pub retry_max_delay: Duration,
+    /// `/health` reports `degraded` when the oldest row is older than this.
+    #[serde(default = "default_outbox_degraded_after", with = "humantime_serde")]
+    pub degraded_after: Duration,
+}
+
+fn default_outbox_max_messages() -> u64 {
+    100_000
+}
+
+fn default_outbox_max_age() -> Duration {
+    Duration::from_secs(24 * 60 * 60)
+}
+
+fn default_outbox_cooldown() -> Duration {
+    Duration::from_secs(5)
+}
+
+fn default_outbox_max_attempts() -> u32 {
+    10
+}
+
+fn default_outbox_retry_base_delay() -> Duration {
+    Duration::from_secs(1)
+}
+
+fn default_outbox_retry_max_delay() -> Duration {
+    Duration::from_secs(5 * 60)
+}
+
+fn default_outbox_degraded_after() -> Duration {
+    Duration::from_secs(5 * 60)
+}
+
+impl OutboxConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        let url = self.database_url.expose_secret();
+        if !(url.starts_with("postgres://")
+            || url.starts_with("postgresql://")
+            || url.starts_with("mysql://"))
+        {
+            return Err(ConfigError::Invalid(
+                "outbox.database_url must start with postgres://, postgresql://, or mysql://"
+                    .into(),
+            ));
+        }
+        let positive_durations = [
+            ("max_age", self.max_age),
+            ("cooldown", self.cooldown),
+            ("retry_base_delay", self.retry_base_delay),
+            ("degraded_after", self.degraded_after),
+        ];
+        for (name, value) in positive_durations {
+            if value.is_zero() {
+                return Err(ConfigError::Invalid(format!(
+                    "outbox.{name} must be greater than zero"
+                )));
+            }
+        }
+        if self.max_messages == 0 {
+            return Err(ConfigError::Invalid(
+                "outbox.max_messages must be greater than zero".into(),
+            ));
+        }
+        if self.max_attempts == 0 {
+            return Err(ConfigError::Invalid(
+                "outbox.max_attempts must be at least 1".into(),
+            ));
+        }
+        if self.retry_max_delay < self.retry_base_delay {
+            return Err(ConfigError::Invalid(
+                "outbox.retry_max_delay must be at least outbox.retry_base_delay".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -102,6 +207,9 @@ impl Config {
             return Err(ConfigError::Invalid(
                 "http_api.bearer_token must not be empty".into(),
             ));
+        }
+        if let Some(outbox) = &self.outbox {
+            outbox.validate()?;
         }
         Ok(())
     }
@@ -207,5 +315,81 @@ mod tests {
         let yaml = format!("{MINIMAL}http_api:\n  bearer_token: ''\n");
         let err = Config::from_yaml(&yaml).unwrap_err();
         assert!(matches!(err, ConfigError::Invalid(msg) if msg.contains("bearer_token")));
+    }
+
+    fn outbox_yaml(extra: &str) -> String {
+        format!(
+            "{MINIMAL}outbox:\n  database_url: postgres://hypermq:pw@localhost:5433/hypermq\n{extra}"
+        )
+    }
+
+    #[test]
+    fn outbox_is_optional_and_defaults_apply() {
+        assert!(Config::from_yaml(MINIMAL).unwrap().outbox.is_none());
+        let cfg = Config::from_yaml(&outbox_yaml("")).unwrap();
+        let outbox = cfg.outbox.unwrap();
+        assert_eq!(outbox.max_messages, 100_000);
+        assert_eq!(outbox.max_age, Duration::from_secs(24 * 60 * 60));
+        assert_eq!(outbox.cooldown, Duration::from_secs(5));
+        assert_eq!(outbox.max_attempts, 10);
+        assert_eq!(outbox.retry_base_delay, Duration::from_secs(1));
+        assert_eq!(outbox.retry_max_delay, Duration::from_secs(5 * 60));
+        assert_eq!(outbox.degraded_after, Duration::from_secs(5 * 60));
+    }
+
+    #[test]
+    fn accepts_postgres_and_mysql_urls() {
+        for url in [
+            "postgres://u:p@localhost/db",
+            "postgresql://u:p@localhost/db",
+            "mysql://u:p@localhost/db",
+        ] {
+            let yaml = format!("{MINIMAL}outbox:\n  database_url: {url}\n");
+            assert!(Config::from_yaml(&yaml).is_ok(), "{url} should be accepted");
+        }
+    }
+
+    #[test]
+    fn rejects_outbox_url_with_other_scheme() {
+        let yaml = format!("{MINIMAL}outbox:\n  database_url: sqlite://local.db\n");
+        let err = Config::from_yaml(&yaml).unwrap_err();
+        assert!(matches!(err, ConfigError::Invalid(msg) if msg.contains("database_url")));
+    }
+
+    #[test]
+    fn rejects_zero_outbox_durations() {
+        for key in ["max_age", "cooldown", "retry_base_delay", "degraded_after"] {
+            let err = Config::from_yaml(&outbox_yaml(&format!("  {key}: 0s\n"))).unwrap_err();
+            assert!(
+                matches!(&err, ConfigError::Invalid(msg) if msg.contains(key)),
+                "{key}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_zero_outbox_counts() {
+        let err = Config::from_yaml(&outbox_yaml("  max_messages: 0\n")).unwrap_err();
+        assert!(matches!(err, ConfigError::Invalid(msg) if msg.contains("max_messages")));
+        let err = Config::from_yaml(&outbox_yaml("  max_attempts: 0\n")).unwrap_err();
+        assert!(matches!(err, ConfigError::Invalid(msg) if msg.contains("max_attempts")));
+    }
+
+    #[test]
+    fn rejects_retry_max_below_base() {
+        let yaml = outbox_yaml("  retry_base_delay: 10s\n  retry_max_delay: 5s\n");
+        let err = Config::from_yaml(&yaml).unwrap_err();
+        assert!(matches!(err, ConfigError::Invalid(msg) if msg.contains("retry_max_delay")));
+    }
+
+    #[test]
+    fn rejects_unknown_outbox_key() {
+        assert!(Config::from_yaml(&outbox_yaml("  cooldwn: 5s\n")).is_err());
+    }
+
+    #[test]
+    fn outbox_database_url_is_hidden_in_debug_output() {
+        let cfg = Config::from_yaml(&outbox_yaml("")).unwrap();
+        assert!(!format!("{cfg:?}").contains("pw@"));
     }
 }

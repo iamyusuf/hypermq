@@ -5,5 +5,6 @@ pub mod consumers;
 pub mod error;
 pub mod message;
 pub mod metrics;
+pub mod outbox;
 pub mod shutdown;
 pub mod tasks;

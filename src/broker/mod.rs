@@ -65,10 +65,19 @@ pub enum PublishError {
     Rejected,
 }
 
+/// How a publish request was accepted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Accepted {
+    /// The broker confirmed the message.
+    Published,
+    /// The broker was unavailable and the message was stored in the outbox.
+    Queued,
+}
+
 #[async_trait]
 pub trait Publisher: Send + Sync {
     /// Publishes and waits for the broker confirm.
-    async fn publish(&self, request: PublishRequest) -> Result<(), PublishError>;
+    async fn publish(&self, request: PublishRequest) -> Result<Accepted, PublishError>;
 }
 
 #[derive(Debug, thiserror::Error)]

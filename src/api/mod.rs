@@ -57,7 +57,12 @@ fn guarded(
 }
 
 async fn health(State(state): State<AppState>) -> Json<Value> {
-    Json(json!({ "status": "ok", "role": state.role.as_str() }))
+    let status = if state.metrics.outbox.is_degraded() {
+        "degraded"
+    } else {
+        "ok"
+    };
+    Json(json!({ "status": status, "role": state.role.as_str() }))
 }
 
 async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
@@ -81,7 +86,7 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
-    use crate::broker::{PublishError, PublishRequest, PublishTarget};
+    use crate::broker::{Accepted, PublishError, PublishRequest, PublishTarget};
 
     #[derive(Default)]
     struct FakePublisher {
@@ -91,12 +96,12 @@ mod tests {
 
     #[async_trait]
     impl Publisher for FakePublisher {
-        async fn publish(&self, request: PublishRequest) -> Result<(), PublishError> {
+        async fn publish(&self, request: PublishRequest) -> Result<Accepted, PublishError> {
             if let Some(err) = self.fail_with.lock().unwrap().take() {
                 return Err(err);
             }
             self.published.lock().unwrap().push(request);
-            Ok(())
+            Ok(Accepted::Published)
         }
     }
 
@@ -245,6 +250,47 @@ mod tests {
                 code == "broker_unavailable"
             );
         }
+    }
+
+    struct QueuingPublisher;
+
+    #[async_trait]
+    impl Publisher for QueuingPublisher {
+        async fn publish(&self, _request: PublishRequest) -> Result<Accepted, PublishError> {
+            Ok(Accepted::Queued)
+        }
+    }
+
+    #[tokio::test]
+    async fn queued_publish_returns_202_with_message_id() {
+        let app = router(AppState {
+            role: Role::Api,
+            max_body_bytes: 1024,
+            publisher: Arc::new(QueuingPublisher),
+            metrics: Arc::default(),
+            auth: None,
+        });
+        let body = json!({ "queue": "q", "payload": 1 }).to_string();
+        let (status, _, out) = send(app, post_publish(body)).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert!(out["message_id"].is_string());
+    }
+
+    #[tokio::test]
+    async fn health_reports_degraded_when_outbox_is_degraded() {
+        let metrics = Arc::new(Metrics::default());
+        metrics.outbox.set_state(10, 120, 0, true);
+        let app = router(AppState {
+            role: Role::Api,
+            max_body_bytes: 1024,
+            publisher: Arc::new(FakePublisher::default()),
+            metrics,
+            auth: None,
+        });
+        let (status, _, body) =
+            send(app, Request::get("/health").body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"], "degraded");
     }
 
     #[tokio::test]

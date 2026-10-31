@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use axum::Json;
 use axum::extract::State;
+use axum::http::StatusCode;
 use bytes::Bytes;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -10,7 +11,7 @@ use uuid::Uuid;
 use super::json::ApiJson;
 use super::{ApiError, AppState};
 use crate::broker::{
-    ATTEMPT_HEADER, MAX_NAME_LEN, MAX_ROUTING_KEY_LEN, PublishRequest, PublishTarget,
+    ATTEMPT_HEADER, Accepted, MAX_NAME_LEN, MAX_ROUTING_KEY_LEN, PublishRequest, PublishTarget,
     is_valid_name, is_valid_routing_key,
 };
 
@@ -33,21 +34,26 @@ pub struct PublishBody {
     payload: Value,
 }
 
+/// `200 OK` when the broker confirmed the message, `202 Accepted` when it was stored in the outbox.
 pub async fn publish(
     State(state): State<AppState>,
     ApiJson(body): ApiJson<PublishBody>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<(StatusCode, Json<Value>), ApiError> {
     let request = body.into_request()?;
     let message_id = request.message_id.clone();
 
     let result = state.publisher.publish(request).await;
     state.metrics.record_publish(result.is_ok());
-    result.map_err(|err| {
+    let accepted = result.map_err(|err| {
         tracing::warn!(%err, %message_id, "publish failed");
         ApiError::from(err)
     })?;
 
-    Ok(Json(json!({ "message_id": message_id })))
+    let status = match accepted {
+        Accepted::Published => StatusCode::OK,
+        Accepted::Queued => StatusCode::ACCEPTED,
+    };
+    Ok((status, Json(json!({ "message_id": message_id }))))
 }
 
 impl PublishBody {

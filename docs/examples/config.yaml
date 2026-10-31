@@ -72,3 +72,15 @@ consumers:
         - archive.internal.example.com   # the only hosts the URL may target; required
       exchange: orders.archive           # set exactly one of exchange or queue
       routing_key: dead.order            # exchange targets only
+
+# Optional. Publishes that RabbitMQ cannot take (broker down or publish failed) are stored here and
+# relayed later. Use postgres:// for development. Keep the real URL out of version control.
+outbox:
+  database_url: postgres://hypermq:change-me@localhost:5433/hypermq
+  max_messages: 100000   # publishes return 503 when this many rows wait
+  max_age: 24h           # older rows move to the dead-letter table
+  cooldown: 5s           # pause between relay cycles
+  max_attempts: 10       # failed publishes of an unroutable message before dead-lettering
+  retry_base_delay: 1s
+  retry_max_delay: 5m
+  degraded_after: 5m     # /health reports degraded when the oldest row is older than this

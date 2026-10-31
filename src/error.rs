@@ -31,6 +31,8 @@ pub enum Error {
     Config(#[from] ConfigError),
     #[error("topology: {0}")]
     Topology(#[from] TopologyError),
+    #[error("outbox: {0}")]
+    Outbox(#[from] crate::outbox::StoreError),
     #[error("io error: {0}")]
     Io(#[from] io::Error),
 }

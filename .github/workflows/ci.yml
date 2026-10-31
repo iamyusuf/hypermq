@@ -46,6 +46,46 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --test rabbitmq -- --ignored
 
+  outbox:
+    name: Integration tests (outbox: PostgreSQL and MySQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: hypermq
+          POSTGRES_PASSWORD: change-me
+          POSTGRES_DB: hypermq
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hypermq -d hypermq"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: root-change-me
+          MYSQL_USER: hypermq
+          MYSQL_PASSWORD: change-me
+          MYSQL_DATABASE: hypermq
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -u hypermq -pchange-me"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      HYPERMQ_TEST_POSTGRES_URL: postgres://hypermq:change-me@localhost:5432/hypermq
+      HYPERMQ_TEST_MYSQL_URL: mysql://hypermq:change-me@localhost:3306/hypermq
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --test outbox -- --ignored
+
   image:
     name: Container image build
     runs-on: ubuntu-latest

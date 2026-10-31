@@ -45,7 +45,7 @@ The Compose file provides a local RabbitMQ and PostgreSQL for development only; 
 | Service | Image | Purpose | Host ports | Status |
 |---|---|---|---|---|
 | `rabbitmq` | `rabbitmq:4-management` | Local broker with management UI | `5673` (AMQP), `15673` (UI) | In `docker-compose.yml` |
-| `postgres` | `postgres:17` | Local database for the publish outbox (Phase 8) | `5433` | In `docker-compose.yml`; unused until Phase 8 |
+| `postgres` | `postgres:17` | Local database for the publish outbox (Phase 8) | `5433` | In `docker-compose.yml`; used when `outbox.database_url` is set |
 | `hypermq` | built from `Dockerfile` | The application | `8080` (HTTP API) | Planned |
 
 The host ports `5673` and `15673` avoid clashing with a RabbitMQ already bound to `5672`/`15672`. Inside the Compose network the broker still listens on `5672`.
@@ -114,7 +114,7 @@ docker compose down -v             # stop and delete the RabbitMQ data volume
 
 - The config file is YAML with plain-text values. HyperMQ does not expand environment variables.
 - `config.yaml` in the project root is gitignored; copy values from [docs/examples/config.yaml](../examples/config.yaml). It holds credentials, so never commit it; in production provide it from a secret mount.
-- Only `broker.url` (required, `amqp://` or `amqps://`), `http_api` (`bind`, `max_body_bytes`, optional `bearer_token`), and `topology` are read today. Other sections in the example are ignored until their phase is implemented.
+- `broker.url` (required, `amqp://` or `amqps://`), `http_api` (`bind`, `max_body_bytes`, optional `bearer_token`), `topology`, and the optional `outbox` section are read today. Other sections in the example are ignored until their phase is implemented.
 - `http_api` and every `topology` entry reject unknown keys, so typos fail at startup.
 - Never log the broker URL or credentials. `broker.url` is held as a secret and redacted in `Debug` output.
 
@@ -134,12 +134,35 @@ docker compose down -v             # stop and delete the RabbitMQ data volume
 - If `topology` is empty no connection is made at startup. If it is set and RabbitMQ is unreachable, startup fails, unlike publishing, which tolerates an unreachable broker.
 - RabbitMQ 4 rejects non-durable, non-exclusive queues, so keep queues durable there.
 
+### Outbox
+
+Optional. When set, publishes that fail with `broker_unavailable` are stored in this database and relayed later (see [publish.md](../api/publish.md#outbox-fallback)). Without it, publishing is fail-fast. Unknown keys fail at startup.
+
+| Key | Default | Notes |
+|---|---|---|
+| `database_url` | required | `postgres://` or `postgresql://` for PostgreSQL, `mysql://` for MySQL 8. Selects the backend. A secret: never logged. |
+| `max_messages` | `100000` | At least 1. At this many stored rows, publishes return `503`. |
+| `max_age` | `24h` | Non-zero. Older rows move to `outbox_dead`. |
+| `cooldown` | `5s` | Non-zero. Pause between relay cycles. |
+| `max_attempts` | `10` | At least 1. Attempts for an unroutable message before it is dead-lettered. |
+| `retry_base_delay` | `1s` | Non-zero. First backoff delay for an unroutable message. |
+| `retry_max_delay` | `5m` | At least `retry_base_delay`. |
+| `degraded_after` | `5m` | Non-zero. `/health` reports `degraded` when the oldest row is older than this. |
+
+Run `hypermq migrate` once before the first start.
+
 CLI options (each also has an environment variable):
 
 | Flag | Env | Default | Meaning |
 |---|---|---|---|
 | `--config` | `HYPERMQ_CONFIG` | `config.yaml` | Path to the config file |
 | `--role` | `HYPERMQ_ROLE` | `all` | `all`, `api`, or `consumers` (see [deployment.md](../core/deployment.md)) |
+
+Subcommand:
+
+| Command | Meaning |
+|---|---|
+| `hypermq migrate` | Creates or updates the outbox tables in `outbox.database_url`, then exits. Run it before the first start and after upgrades that add migrations. Logs and exits without changes when `outbox` is not set. |
 
 Logging uses `RUST_LOG` (default `info`), for example `RUST_LOG=hypermq=debug,lapin=warn cargo run`.
 
@@ -151,10 +174,25 @@ Logging uses `RUST_LOG` (default `info`), for example `RUST_LOG=hypermq=debug,la
 | Run | `cargo run` |
 | Unit tests | `cargo test` |
 | Integration tests | `HYPERMQ_TEST_RABBITMQ_URL=amqp://hypermq:change-me@localhost:5673 cargo test --test rabbitmq -- --ignored` |
+| Outbox integration tests | `HYPERMQ_TEST_POSTGRES_URL=postgres://hypermq:change-me@localhost:5433/hypermq HYPERMQ_TEST_MYSQL_URL=mysql://hypermq:change-me@localhost:3306/hypermq cargo test --test outbox -- --ignored` |
+| Migrate outbox schema | `cargo run -- migrate` |
+| Build without the outbox | `cargo build --no-default-features` |
 | Lint | `cargo clippy --all-targets -- -D warnings` |
 | Format | `cargo fmt` |
 
 Run format, lint, and unit tests before committing.
+
+### Cargo features
+
+| Feature | Default | Enables |
+|---|---|---|
+| `task-http` | yes | HTTP Task kind |
+| `task-amqp` | yes | Publish-to-broker Task kind |
+| `outbox` | via backends | Outbox store, relay, and `hypermq migrate` (SeaORM) |
+| `outbox-postgres` | yes | PostgreSQL backend (implies `outbox`) |
+| `outbox-mysql` | yes | MySQL backend (implies `outbox`) |
+
+A build without the outbox (`--no-default-features`) fails at startup if the config has an `outbox` section.
 
 ## Code map
 
@@ -168,12 +206,16 @@ Run format, lint, and unit tests before committing.
 | `src/broker/mod.rs` | `Publisher` trait, its request/error types, and shared name validation. |
 | `src/broker/topology.rs` | Topology config types, validation, `TopologyManager` trait, and `apply`. |
 | `src/broker/rabbitmq/` | `RabbitPublisher` and `RabbitTopology`. The only code that imports `lapin`. |
+| `src/outbox/` | Publish fallback: `OutboxStore` trait, `OutboxPublisher`, relay loop, `RelayPolicy`. No ORM imports. |
+| `src/outbox/sea/` | SeaORM store, entities, and migrations for PostgreSQL and MySQL. The only code that imports the ORM. |
 | `tests/rabbitmq.rs` | Integration tests that need RabbitMQ. |
+| `tests/outbox.rs` | Integration tests that need PostgreSQL and MySQL. |
 
 Dependency rules:
 - `api` talks to the broker only through the `Publisher` trait.
 - Only `broker/rabbitmq` imports the AMQP client.
 - The consumer engine (later phases) depends on traits only, never on RabbitMQ or a concrete Task kind.
+- Only `outbox/sea` imports the ORM. `outbox` uses the `Publisher` trait and never names RabbitMQ.
 
 ## Request flow for `POST /publish`
 
@@ -181,15 +223,24 @@ Dependency rules:
 sequenceDiagram
     participant C as Client
     participant H as api::publish
+    participant O as OutboxPublisher
     participant P as Publisher (RabbitPublisher)
     participant R as RabbitMQ
+    participant D as Outbox database
     C->>H: POST /publish (JSON)
     H->>H: ApiJson parse, PublishBody::into_request (validate, bound)
-    H->>P: publish(PublishRequest)
+    H->>O: publish(PublishRequest)
+    O->>P: publish(PublishRequest)
     P->>R: basic_publish (mandatory, persistent)
     R-->>P: confirm (ack, ack+return, nack)
-    P-->>H: Ok or PublishError
-    H-->>C: 200 or stable JSON error
+    P-->>O: Ok or PublishError
+    alt broker unavailable and outbox configured
+        O->>D: insert row
+        O-->>H: Queued (202) or Unavailable (503)
+    else published, or any other error
+        O-->>H: Published (200) or PublishError
+    end
+    H-->>C: 200, 202, or stable JSON error
 ```
 
 ## How to add things
@@ -223,6 +274,7 @@ sequenceDiagram
 - RabbitMQ 4 rejects transient non-exclusive queues, so declare test queues as durable and delete them at the end.
 - For a throwaway broker instead of Compose: `docker run -d --rm --name hypermq-test-rabbit -p 5673:5672 rabbitmq:4`.
 - CI will start RabbitMQ as a service container or through Compose before the integration suite (roadmap Phase 5).
+- Outbox tests (`tests/outbox.rs`) run one round trip per backend and need `HYPERMQ_TEST_POSTGRES_URL` and `HYPERMQ_TEST_MYSQL_URL`. MySQL is not in Compose; for a throwaway MySQL 8: `docker run -d --rm --name hypermq-test-mysql -p 3306:3306 -e MYSQL_ROOT_PASSWORD=root-change-me -e MYSQL_USER=hypermq -e MYSQL_PASSWORD=change-me -e MYSQL_DATABASE=hypermq mysql:8`. CI runs both in the `outbox` job.
 
 ## Conventions
 
@@ -237,7 +289,11 @@ sequenceDiagram
 | Symptom | Cause and fix |
 |---|---|
 | `ACCESS_REFUSED - Login was refused` at startup | The broker rejects the credentials in `broker.url`. Fix the user and password, or use the Compose broker. |
-| `POST /publish` returns `503 broker_unavailable` | RabbitMQ is down or unreachable; the client should retry. HyperMQ reconnects on the next request. |
+| `POST /publish` returns `503 broker_unavailable` | RabbitMQ is down and no outbox is configured, or the outbox is full or its database is unreachable. Check `hypermq_outbox_depth` and `outbox.database_url`. Without an outbox, the client should retry. |
+| Startup fails with `outbox database is not ready; run hypermq migrate first` | The schema is missing or the database is unreachable. Run `hypermq migrate` with the same config, and check `database_url`. |
+| Startup fails when `outbox` is set but the binary has no backend feature | Build with `outbox-postgres` or `outbox-mysql` (both are default). |
+| `/health` reports `degraded` | The outbox is growing, its oldest row is older than `degraded_after`, or a database call failed. Check `hypermq_outbox_depth` and the relay logs. |
+| Rows accumulate in `outbox_dead` | Read `reason` and `last_error`, fix the exchange or routing key, then delete the rows. |
 | `POST /publish` returns `422 unroutable` | No queue received the message: the queue does not exist, or the exchange has no matching binding. |
 | `POST /publish` returns `404 target_not_found` | The exchange does not exist. Declare it under `topology`. |
 | Startup fails with `topology: ... conflicts with an existing declaration` | The exchange or queue exists with different settings (for example another `message_ttl`). Match the existing settings, or delete the entity on the broker if it is disposable. |

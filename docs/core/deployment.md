@@ -13,10 +13,20 @@ HyperMQ ships as one binary and one container image. A role setting decides whet
 | Role | Runs | Needs |
 |---|---|---|
 | `all` (default) | HTTP API and consumer manager | Everything below |
-| `api` | HTTP API and publisher only | Broker connection, API settings |
+| `api` | HTTP API and publisher only | Broker connection, API settings, and the outbox database when `outbox` is set |
 | `consumers` | Consumer manager only | Broker connection, consumer and Task settings, Task secrets |
 
 The role is chosen by a CLI flag or config key, for example `hypermq --role consumers`. Planned for roadmap Phase 0 (selection) and Phase 5 (image and documented deployments).
+
+## Outbox database
+
+When `outbox` is set, the `api` and `all` roles store publishes that RabbitMQ cannot take in a shared database and relay them later (see [publish.md](../api/publish.md) and roadmap Phase 8). The `consumers` role does not need it.
+
+- Run `hypermq migrate --config <path>` once before the first replica starts, and after upgrades that add migrations. Normal startup does not migrate; `api` and `all` refuse to start when the schema is missing.
+- Every `api` and `all` replica runs one relay. Relays claim rows with `SELECT ... FOR UPDATE SKIP LOCKED`, so two replicas do not hold the same row at once.
+- Supported databases: PostgreSQL (`postgres://`) and MySQL 8 (`mysql://`), selected by the URL scheme. Both backends are in the default build.
+- The database needs durable storage: the Compose `postgres-data` volume in development, managed storage in production.
+- `outbox.database_url` holds credentials; provide it from a secret mount like the rest of the config.
 
 ## Container image
 

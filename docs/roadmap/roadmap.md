@@ -78,6 +78,8 @@ Exit: these behaviors are covered by tests and documented, and the open design q
 
 ## Phase 8: Publish outbox
 
+Status: implemented. The unit tests and `tests/outbox.rs` compile; the PostgreSQL and MySQL integration tests have not yet run against live databases.
+
 Until this phase, publishing is fail-fast: if RabbitMQ is unreachable or a confirm times out, the API returns `503` with `Retry-After` and the client retries. Clients may send an idempotency key or message id so retries do not create duplicates.
 
 This phase adds a persistent outbox as a fallback. A message is stored in the database only when its direct publish to RabbitMQ fails with a connection, channel, or confirm failure. Otherwise it is published directly, as before. A relay worker publishes stored messages later, so the API can accept them while RabbitMQ is down.
@@ -89,16 +91,16 @@ Decisions:
 
 Steps:
 
-- Keep direct publishing as the first path. If it fails with `broker_unavailable` (connection, channel, or confirm failure), insert the message into the `outbox` table and respond `202 Accepted`. Direct success keeps `200 OK`. A broker nack (`publish_rejected`) stays `502` and is not stored.
+- Keep direct publishing as the first path. If it fails with `broker_unavailable` (connection, channel, or confirm failure), insert the message into the `outbox_messages` table and respond `202 Accepted`. Direct success keeps `200 OK`. A broker nack (`publish_rejected`) stays `502` and is not stored.
 - Enable the fallback by setting `outbox.database_url`. Without it, publishing stays fail-fast.
-- The `outbox` table holds the message id (primary key), exchange, routing key, headers, body, attempt count, next attempt time, creation time, and last error.
+- The `outbox_messages` table holds an auto-increment `seq` (primary key, which sets the order), `message_id` (not unique), `target_kind` and `target` (exchange or queue), `routing_key`, `content_type`, `headers`, `body`, `attempts`, `created_at`, `next_attempt_at`, and `last_error`. Dead-lettered rows go to `outbox_dead` with the same message fields plus `dead_at` and `reason`.
 - Run one relay worker per process in the `api` and `all` roles, for the life of the process. Each cycle claims due rows with `SELECT ... FOR UPDATE SKIP LOCKED` (supported by PostgreSQL and MySQL 8), publishes them with publisher confirms, deletes each row after its confirm, and then waits a cooldown before the next cycle. The cooldown is 5 seconds by default and configurable; it also bounds delivery latency.
-- Retry with exponential backoff and a cap while the broker is down. A failed row gets a later `next_attempt_at`; the worker keeps running and reconnects when the broker returns.
+- While the broker is down, a cycle stops at the first failed publish and the next cycle starts after the cooldown. Broker outages do not count as attempts, so they never dead-letter a row. An unroutable row gets a later `next_attempt_at` with exponential backoff (`retry_base_delay`, doubling, capped at `retry_max_delay`) and dead-letters after `max_attempts`. The worker keeps running and reconnects when the broker returns.
 - Define ordering: within the outbox, a row is published only after earlier rows with the same exchange and routing key. A failing row blocks only its own key. A message published directly can overtake earlier outbox rows with the same key, and replicas do not guarantee per-key order. The docs must say so.
 - Bound the outbox by row count and age (`outbox.max_messages`, `outbox.max_age`). At the row limit the API returns `503` with `Retry-After`. Rows older than `max_age` move to the dead-letter table.
 - Dead-letter rows that can never be published (the broker rejects the exchange or message, or the message stays unroutable after the maximum attempts). They move to an `outbox_dead` table with the last error and stay until an operator removes them.
-- Expose outbox depth, oldest message age, dead-letter count, and relay failures as metrics. Report `degraded` in `/health` when depth keeps growing across cycles or the oldest message exceeds a threshold.
-- Run migrations as an explicit `hypermq migrate` step before replicas start, not on every startup.
+- Expose outbox depth, oldest message age, dead-letter count, and relay failures as metrics. Report `degraded` in `/health` when depth grew since the previous cycle, the oldest message exceeds `degraded_after`, or a database call failed since the last cycle. Metrics are refreshed once per cycle.
+- Run migrations as an explicit `hypermq migrate --config <path>` step before replicas start, not on every startup. The `api` and `all` roles refuse to start when the schema is missing.
 - Configure the database with `outbox.database_url`. The URL scheme (`postgres://` or `mysql://`) selects the backend. Treat it as a secret: read it from the environment or config and never log it.
 - Deployment: all replicas share one database; there is no per-replica outbox. The database needs durable storage (the Compose `postgres-data` volume in development, managed storage in production).
 - Development: the Compose `postgres` service (`postgres:17`, host port `5433`) provides the database.

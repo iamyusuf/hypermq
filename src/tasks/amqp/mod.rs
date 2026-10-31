@@ -72,7 +72,7 @@ impl Task for AmqpTask {
         };
 
         match self.publisher.publish(request).await {
-            Ok(()) => TaskOutcome::Success,
+            Ok(_) => TaskOutcome::Success,
             Err(err) => outcome_for_error(&err),
         }
     }
@@ -198,6 +198,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::broker::Accepted;
     use crate::message::{MessageId, RoutingInfo};
 
     #[derive(Default)]
@@ -208,11 +209,11 @@ mod tests {
 
     #[async_trait]
     impl Publisher for FakePublisher {
-        async fn publish(&self, request: PublishRequest) -> Result<(), PublishError> {
+        async fn publish(&self, request: PublishRequest) -> Result<Accepted, PublishError> {
             self.requests.lock().unwrap().push(request);
             match self.failure.lock().unwrap().take() {
                 Some(err) => Err(err),
-                None => Ok(()),
+                None => Ok(Accepted::Published),
             }
         }
     }

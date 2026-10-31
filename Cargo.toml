@@ -7,11 +7,14 @@ edition = "2024"
 async-trait = "0.1.92"
 axum = "0.8.9"
 bytes = "1.12.1"
+chrono = "0.4"
 clap = { version = "4.6.7", features = ["derive", "env"] }
 futures-lite = "2.6.1"
 humantime-serde = "1.1.1"
 lapin = "4.12.3"
 reqwest = { version = "0.13.5", optional = true }
+sea-orm = { version = "2.0.4", default-features = false, features = ["macros", "runtime-tokio-rustls", "with-chrono", "with-uuid"], optional = true }
+sea-orm-migration = { version = "2.0.4", default-features = false, features = ["runtime-tokio-rustls"], optional = true }
 secrecy = { version = "0.10.3", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
@@ -28,6 +31,9 @@ http-body-util = "0.1.5"
 tower = "0.5.3"
 
 [features]
-default = ["task-http", "task-amqp"]
+default = ["task-http", "task-amqp", "outbox-postgres", "outbox-mysql"]
 task-http = ["dep:reqwest"]
 task-amqp = ["dep:url"]
+outbox = ["dep:sea-orm", "dep:sea-orm-migration"]
+outbox-postgres = ["outbox", "sea-orm/sqlx-postgres", "sea-orm-migration/sqlx-postgres"]
+outbox-mysql = ["outbox", "sea-orm/sqlx-mysql", "sea-orm-migration/sqlx-mysql"]

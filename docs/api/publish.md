@@ -33,7 +33,7 @@ Messages are published persistent (`delivery_mode: 2`) with `mandatory` set, so 
 
 ## Responses
 
-Success: `200 OK`
+Success: `200 OK` when RabbitMQ confirmed the message, or `202 Accepted` when it was stored in the outbox (see below). Both return the same body:
 
 ```json
 { "message_id": "order-42-created" }
@@ -53,9 +53,16 @@ Errors share one shape:
 | 413 | `payload_too_large` | Body exceeds `max_body_bytes`. |
 | 422 | `unroutable` | The broker accepted the message but no queue matched (no binding, or the queue does not exist). |
 | 502 | `publish_rejected` | The broker negatively acknowledged the message. |
-| 503 | `broker_unavailable` | Connection, channel, or confirm failure. Includes `Retry-After: 5`; the client should retry. |
+| 503 | `broker_unavailable` | Connection, channel, or confirm failure, and no outbox is configured. With an outbox, the response is `202` instead. Also returned when the outbox is full or its database cannot be used. Includes `Retry-After: 5`; the client should retry. |
 
-Publishing is fail-fast: HyperMQ does not buffer messages while RabbitMQ is down (see the outbox in roadmap Phase 8). Retries are safe when the client sends the same `message_id`, because consumers can deduplicate on it; delivery is at-least-once.
+## Outbox fallback
+
+When `outbox.database_url` is set, a publish that fails with `broker_unavailable` is stored in the outbox database and answered `202 Accepted`. A relay worker in the `api` and `all` roles publishes stored messages once RabbitMQ is back. It runs every `outbox.cooldown` (5 seconds by default). Only failed publishes are stored; a publish that RabbitMQ confirms never writes to the database. Without `outbox.database_url`, a publish fails with `503` and nothing is buffered.
+
+- Errors other than `broker_unavailable` (`400`, `404`, `422`, `502`) are not stored.
+- Delivery is at-least-once. A stored message can be published more than once, and a client that retries after a `202` creates another copy with the same `message_id`. Consumers must deduplicate on `message_id`.
+- Ordering: a stored message is published only after earlier stored messages with the same exchange and routing key. A row that keeps failing blocks only its own key. A message published directly while RabbitMQ is healthy can overtake stored messages with the same key. With several HyperMQ replicas, per-key order is not guaranteed.
+- Limits: at `outbox.max_messages` stored rows, the API returns `503` with `Retry-After`. Rows older than `outbox.max_age` move to the dead-letter table, as do rows the broker can never accept (`target_not_found`, `publish_rejected`, or an unroutable message after `outbox.max_attempts`). Dead-letter rows (`outbox_dead`) stay until an operator removes them.
 
 ## Broker connection
 

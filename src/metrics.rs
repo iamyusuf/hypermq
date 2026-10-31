@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Write;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -54,11 +54,13 @@ fn outcome_index(outcome: &TaskOutcome) -> usize {
 pub struct Metrics {
     accepted: AtomicU64,
     failed: AtomicU64,
+    pub outbox: OutboxMetrics,
     consumers: Mutex<BTreeMap<String, Arc<ConsumerMetrics>>>,
 }
 
 impl Metrics {
-    /// Records one publish attempt against the broker. Requests rejected by validation are not counted.
+    /// Records one publish request. `accepted` covers `200` and `202` responses; `failed` covers the rest.
+    /// Requests rejected by validation are not counted.
     pub fn record_publish(&self, accepted: bool) {
         let counter = if accepted {
             &self.accepted
@@ -104,6 +106,7 @@ impl Metrics {
             "hypermq_messages_published_total{{result=\"failed\"}} {}",
             self.failed.load(Ordering::Relaxed)
         );
+        self.outbox.render(&mut out);
 
         family(
             &mut out,
@@ -189,6 +192,122 @@ impl Metrics {
 fn family(out: &mut String, name: &str, kind: &str, help: &str) {
     let _ = writeln!(out, "# HELP {name} {help}");
     let _ = writeln!(out, "# TYPE {name} {kind}");
+}
+
+/// Outbox counters and state. Stays at zero when no outbox is configured.
+#[derive(Default)]
+pub struct OutboxMetrics {
+    queued: AtomicU64,
+    relayed: AtomicU64,
+    relay_failures: AtomicU64,
+    dead_lettered: AtomicU64,
+    depth: AtomicU64,
+    oldest_age_seconds: AtomicU64,
+    dead_letters: AtomicU64,
+    degraded: AtomicBool,
+}
+
+impl OutboxMetrics {
+    /// A publish was stored in the outbox because the broker was unavailable.
+    pub fn record_queued(&self) {
+        self.queued.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A stored message was published and its row deleted.
+    pub fn record_relayed(&self) {
+        self.relayed.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A relay attempt failed and the row stays for a later attempt.
+    pub fn record_relay_failure(&self) {
+        self.relay_failures.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Rows moved to the dead-letter table, by relay or expiry.
+    pub fn record_dead_lettered(&self, count: u64) {
+        self.dead_lettered.fetch_add(count, Ordering::Relaxed);
+    }
+
+    /// A database call failed. Reports degraded until the next relay cycle recomputes it.
+    pub fn record_store_error(&self) {
+        self.degraded.store(true, Ordering::Relaxed);
+    }
+
+    /// Replaces the gauges after a relay cycle.
+    pub fn set_state(
+        &self,
+        depth: u64,
+        oldest_age_seconds: u64,
+        dead_letters: u64,
+        degraded: bool,
+    ) {
+        self.depth.store(depth, Ordering::Relaxed);
+        self.oldest_age_seconds
+            .store(oldest_age_seconds, Ordering::Relaxed);
+        self.dead_letters.store(dead_letters, Ordering::Relaxed);
+        self.degraded.store(degraded, Ordering::Relaxed);
+    }
+
+    /// True when the outbox is growing or its oldest row is too old. Reported by `/health`.
+    pub fn is_degraded(&self) -> bool {
+        self.degraded.load(Ordering::Relaxed)
+    }
+
+    fn render(&self, out: &mut String) {
+        let counters = [
+            (
+                "hypermq_outbox_queued_total",
+                "Publishes stored in the outbox because the broker was unavailable.",
+                &self.queued,
+            ),
+            (
+                "hypermq_outbox_relayed_total",
+                "Stored messages published by the relay.",
+                &self.relayed,
+            ),
+            (
+                "hypermq_outbox_relay_failures_total",
+                "Relay attempts that failed and will be retried.",
+                &self.relay_failures,
+            ),
+            (
+                "hypermq_outbox_dead_lettered_total",
+                "Outbox rows moved to the dead-letter table.",
+                &self.dead_lettered,
+            ),
+        ];
+        for (name, help, value) in counters {
+            family(out, name, "counter", help);
+            let _ = writeln!(out, "{name} {}", value.load(Ordering::Relaxed));
+        }
+
+        let gauges = [
+            (
+                "hypermq_outbox_depth",
+                "Rows waiting in the outbox.",
+                self.depth.load(Ordering::Relaxed),
+            ),
+            (
+                "hypermq_outbox_oldest_age_seconds",
+                "Age of the oldest waiting row, in seconds.",
+                self.oldest_age_seconds.load(Ordering::Relaxed),
+            ),
+            (
+                "hypermq_outbox_dead_letters",
+                "Rows in the dead-letter table.",
+                self.dead_letters.load(Ordering::Relaxed),
+            ),
+            (
+                "hypermq_outbox_degraded",
+                "1 when the outbox is growing or its oldest row is too old.",
+                u64::from(self.degraded.load(Ordering::Relaxed)),
+            ),
+        ];
+        for (name, help, value) in gauges {
+            family(out, name, "gauge", help);
+            let _ = writeln!(out, "{name} {value}");
+        }
+    }
 }
 
 /// Counters for one consumer. Obtained from [`Metrics::consumer`].

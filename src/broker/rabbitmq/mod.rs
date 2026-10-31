@@ -8,7 +8,7 @@ use lapin::{BasicProperties, Channel, Confirmation, Connection, ConnectionProper
 use secrecy::{ExposeSecret, SecretString};
 use tokio::sync::Mutex;
 
-use super::{PublishError, PublishRequest, PublishTarget, Publisher};
+use super::{Accepted, PublishError, PublishRequest, PublishTarget, Publisher};
 
 mod consume;
 mod topology;
@@ -97,7 +97,7 @@ impl RabbitPublisher {
 
 #[async_trait]
 impl Publisher for RabbitPublisher {
-    async fn publish(&self, request: PublishRequest) -> Result<(), PublishError> {
+    async fn publish(&self, request: PublishRequest) -> Result<Accepted, PublishError> {
         let channel = self.channel().await?;
 
         let (exchange, routing_key) = match request.target {
@@ -142,7 +142,7 @@ impl Publisher for RabbitPublisher {
                 Err(PublishError::Unavailable("confirm timed out".into()))
             }
             Ok(Err(err)) => Err(classify(err)),
-            Ok(Ok(Confirmation::Ack(None))) => Ok(()),
+            Ok(Ok(Confirmation::Ack(None))) => Ok(Accepted::Published),
             Ok(Ok(Confirmation::Ack(Some(_)) | Confirmation::Nack(Some(_)))) => {
                 Err(PublishError::Unroutable)
             }

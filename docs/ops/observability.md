@@ -30,6 +30,23 @@ scrape_configs:
 
 Omit `authorization` when no bearer token is configured.
 
+`GET /health` returns `"status": "degraded"` while `hypermq_outbox_degraded` is 1.
+
+### Outbox metrics
+
+The outbox metrics (roadmap Phase 8) have no labels. The gauges are refreshed once per relay cycle, so they can lag by up to one `outbox.cooldown`. The families are always declared; they stay at zero when no outbox is configured.
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `hypermq_outbox_queued_total` | counter | Publishes stored in the outbox because the broker was unavailable. |
+| `hypermq_outbox_relayed_total` | counter | Stored messages published by the relay. |
+| `hypermq_outbox_relay_failures_total` | counter | Relay attempts that failed; the row stays for a later attempt. |
+| `hypermq_outbox_dead_lettered_total` | counter | Rows moved to `outbox_dead`, by the relay or by expiry. |
+| `hypermq_outbox_depth` | gauge | Rows waiting in the outbox. |
+| `hypermq_outbox_oldest_age_seconds` | gauge | Age of the oldest waiting row, in seconds. |
+| `hypermq_outbox_dead_letters` | gauge | Rows in `outbox_dead`. |
+| `hypermq_outbox_degraded` | gauge | 1 when depth grew since the last relay cycle, the oldest row is older than `degraded_after`, or a database call failed since the last cycle. |
+
 ## Logs
 
 Logs are written to stderr. Two options control the output:

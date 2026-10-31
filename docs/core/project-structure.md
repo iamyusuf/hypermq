@@ -23,11 +23,16 @@ hypermq/
 │   │   ├── manager.rs
 │   │   ├── consumer.rs
 │   │   └── retry.rs         # RetryPolicy trait and default implementation
+│   ├── outbox/              # publish fallback: store, relay loop, and the SeaORM backend
+│   │   ├── mod.rs           # OutboxStore trait, connect/migrate, StoreError
+│   │   ├── publisher.rs     # OutboxPublisher: stores a publish when the broker is unavailable
+│   │   ├── relay.rs         # relay cycle, RelayPolicy, retry decisions
+│   │   └── sea/             # the only module that imports the ORM (PostgreSQL and MySQL)
 │   └── tasks/               # Task trait, TaskOutcome, TaskFactory, TaskRegistry
 │       ├── mod.rs
 │       ├── http/            # HTTP Task kind
 │       └── amqp/            # publish-to-broker Task kind; later kinds each get their own module
-├── tests/                   # integration tests that need RabbitMQ
+├── tests/                   # integration tests that need RabbitMQ, PostgreSQL, or MySQL
 └── target/                  # build output; never edit or commit
 ```
 
@@ -42,7 +47,9 @@ flowchart TD
     main --> consumers
     main --> rabbitmq[broker/rabbitmq]
     main --> tasks
+    main --> outbox
     api --> broker
+    outbox --> broker
     consumers --> broker
     consumers --> tasks
     consumers --> retry[consumers/retry]
@@ -55,6 +62,8 @@ flowchart TD
 - `api` and `consumers` never import each other.
 - `consumers` depends on the `Broker`, `Task`, and `RetryPolicy` traits only; it never names `broker/rabbitmq` or any `tasks/<kind>` module.
 - Only `broker/rabbitmq` imports the AMQP client.
+- `message` and `error` have no dependency on other project modules.
+- `outbox` depends on the `Publisher` trait and the metrics types; it never names `broker/rabbitmq`. Only `outbox/sea` imports the ORM. `main` builds the `OutboxPublisher` around the RabbitMQ publisher and gives it to `api` as a `Publisher`.
 - `message` and `error` have no dependency on other project modules.
 - Each `tasks/<kind>` module depends on `tasks` and `message`, never on `consumers`. A kind that publishes to a broker (`tasks/amqp`) may use the `broker` traits and types (`Publisher`, `PublishRequest`), but never `broker/rabbitmq`. `main` passes it a `PublisherFactory` that builds the concrete publisher.
 

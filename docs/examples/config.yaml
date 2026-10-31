@@ -8,6 +8,8 @@ broker:
 http_api:
   bind: 0.0.0.0:8080
   max_body_bytes: 1048576
+  # Optional. When set, POST /publish requires `Authorization: Bearer <token>`. Keep the real value out of version control.
+  # bearer_token: change-me
 
 # Declared at startup (exchanges, then queues, then bindings). Re-declaring identical settings is a
 # no-op; a conflicting existing entity fails startup. `durable` defaults to true. Optional queue

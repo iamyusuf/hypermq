@@ -474,7 +474,9 @@ async fn wait_for_attempts(seen: &Seen, expected: usize) {
 
 fn start(consumer: Consumer) -> tokio::task::JoinHandle<Result<(), BrokerError>> {
     let broker = RabbitBroker::new(SecretString::from(url()));
-    tokio::spawn(async move { consumer.run(&broker).await })
+    // The sender is dropped here, so shutdown never fires; `stop` aborts the task instead.
+    let (_, shutdown) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move { consumer.run(&broker, &shutdown).await })
 }
 
 /// Lets in-flight settlements finish, then stops the consumer and lets the broker requeue anything unsettled.
@@ -657,6 +659,7 @@ mod http_end_to_end {
             role: Role::Api,
             max_body_bytes: 64 * 1024,
             publisher: Arc::new(publisher()),
+            auth: None,
         });
         let body = json!({ "queue": queue, "payload": payload }).to_string();
         let request = Request::builder()

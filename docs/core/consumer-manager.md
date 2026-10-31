@@ -61,11 +61,11 @@ Each consumer runs this loop. It is the "consumer engine" referred to elsewhere 
 2. Run `Task::execute(message)` under the Task timeout; a timeout counts as `Retryable`. Run up to `prefetch` deliveries concurrently.
 3. Ask `RetryPolicy::decide(outcome, attempt)`.
 4. Apply the decision through the `Delivery`: `Ack`, `retry(delay)`, or `reject` for dead-lettering.
-5. If the stream errors or ends, report `Reconnecting`, wait with backoff, and resubscribe.
+5. If the stream errors or ends, report `Reconnecting`, wait with backoff, and resubscribe. Backoff starts at 1 second and doubles up to 30 seconds. A session that lasted at least 30 seconds resets it.
 
 Ack happens only after the Task returned `Success`. A message is never requeued indefinitely.
 
-Status: Phase 3 implements steps 1 to 4 and shutdown. Step 5 (reconnect with backoff) is Phase 5; until then a stream error stops that consumer and is logged.
+Status: Phase 3 implements steps 1 to 4 and shutdown. Phase 5 implements step 5 (reconnect with backoff). An operation error (for example a missing queue) is not retried; it stops that consumer and is logged. Shutdown stops taking deliveries, waits up to 30 seconds for in-flight work, and then the process exits.
 
 ## Lifecycle
 

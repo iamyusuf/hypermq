@@ -25,6 +25,8 @@ pub enum ApiError {
     BrokerUnavailable,
     #[error("message broker rejected the message")]
     PublishRejected,
+    #[error("missing or invalid bearer token")]
+    Unauthorized,
 }
 
 impl ApiError {
@@ -36,6 +38,7 @@ impl ApiError {
             ApiError::Unroutable => StatusCode::UNPROCESSABLE_ENTITY,
             ApiError::BrokerUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             ApiError::PublishRejected => StatusCode::BAD_GATEWAY,
+            ApiError::Unauthorized => StatusCode::UNAUTHORIZED,
         }
     }
 
@@ -48,6 +51,7 @@ impl ApiError {
             ApiError::Unroutable => "unroutable",
             ApiError::BrokerUnavailable => "broker_unavailable",
             ApiError::PublishRejected => "publish_rejected",
+            ApiError::Unauthorized => "unauthorized",
         }
     }
 }
@@ -82,6 +86,11 @@ impl IntoResponse for ApiError {
                 header::RETRY_AFTER,
                 HeaderValue::from_static(RETRY_AFTER_SECS),
             );
+        }
+        if matches!(self, ApiError::Unauthorized) {
+            response
+                .headers_mut()
+                .insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
         }
         response
     }

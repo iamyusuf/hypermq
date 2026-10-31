@@ -49,6 +49,9 @@ pub struct HttpApiConfig {
     pub bind: SocketAddr,
     #[serde(default = "default_max_body_bytes")]
     pub max_body_bytes: usize,
+    /// When set, `POST /publish` requires `Authorization: Bearer <token>`. `/health` stays open.
+    #[serde(default)]
+    pub bearer_token: Option<SecretString>,
 }
 
 impl Default for HttpApiConfig {
@@ -56,6 +59,7 @@ impl Default for HttpApiConfig {
         Self {
             bind: default_bind(),
             max_body_bytes: default_max_body_bytes(),
+            bearer_token: None,
         }
     }
 }
@@ -92,6 +96,13 @@ impl Config {
         }
         self.topology.validate().map_err(ConfigError::Invalid)?;
         consumers::validate(&self.consumers).map_err(ConfigError::Invalid)?;
+        if let Some(token) = &self.http_api.bearer_token
+            && token.expose_secret().is_empty()
+        {
+            return Err(ConfigError::Invalid(
+                "http_api.bearer_token must not be empty".into(),
+            ));
+        }
         Ok(())
     }
 }
@@ -168,5 +179,33 @@ mod tests {
     fn debug_output_hides_the_url() {
         let cfg = Config::from_yaml(MINIMAL).unwrap();
         assert!(!format!("{cfg:?}").contains("pw@"));
+    }
+
+    #[test]
+    fn bearer_token_is_optional_and_hidden_in_debug_output() {
+        assert!(
+            Config::from_yaml(MINIMAL)
+                .unwrap()
+                .http_api
+                .bearer_token
+                .is_none()
+        );
+        let yaml = format!("{MINIMAL}http_api:\n  bearer_token: hunter2-token\n");
+        let cfg = Config::from_yaml(&yaml).unwrap();
+        assert_eq!(
+            cfg.http_api
+                .bearer_token
+                .as_ref()
+                .map(|t| t.expose_secret()),
+            Some("hunter2-token")
+        );
+        assert!(!format!("{cfg:?}").contains("hunter2-token"));
+    }
+
+    #[test]
+    fn rejects_empty_bearer_token() {
+        let yaml = format!("{MINIMAL}http_api:\n  bearer_token: ''\n");
+        let err = Config::from_yaml(&yaml).unwrap_err();
+        assert!(matches!(err, ConfigError::Invalid(msg) if msg.contains("bearer_token")));
     }
 }

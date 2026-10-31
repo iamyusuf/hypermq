@@ -111,7 +111,7 @@ docker compose down -v             # stop and delete the RabbitMQ data volume
 
 - The config file is YAML with plain-text values. HyperMQ does not expand environment variables.
 - `config.yaml` in the project root is gitignored; copy values from [docs/examples/config.yaml](../examples/config.yaml). It holds credentials, so never commit it; in production provide it from a secret mount.
-- Only `broker.url` (required, `amqp://` or `amqps://`), `http_api` (`bind`, `max_body_bytes`), and `topology` are read today. Other sections in the example are ignored until their phase is implemented.
+- Only `broker.url` (required, `amqp://` or `amqps://`), `http_api` (`bind`, `max_body_bytes`, optional `bearer_token`), and `topology` are read today. Other sections in the example are ignored until their phase is implemented.
 - `http_api` and every `topology` entry reject unknown keys, so typos fail at startup.
 - Never log the broker URL or credentials. `broker.url` is held as a secret and redacted in `Debug` output.
 

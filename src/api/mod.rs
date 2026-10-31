@@ -1,3 +1,4 @@
+mod auth;
 mod error;
 mod json;
 mod publish;
@@ -5,8 +6,10 @@ mod publish;
 use std::sync::Arc;
 
 use axum::extract::{DefaultBodyLimit, State};
+use axum::middleware::from_fn_with_state;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use secrecy::SecretString;
 use serde_json::{Value, json};
 
 pub use error::ApiError;
@@ -19,12 +22,21 @@ pub struct AppState {
     pub role: Role,
     pub max_body_bytes: usize,
     pub publisher: Arc<dyn Publisher>,
+    /// When set, `/publish` requires this bearer token. `/health` is never protected.
+    pub auth: Option<Arc<SecretString>>,
 }
 
 pub fn router(state: AppState) -> Router {
     let mut router = Router::new().route("/health", get(health));
     if state.role != Role::Consumers {
-        router = router.route("/publish", post(publish::publish));
+        let publish = post(publish::publish);
+        let publish = match &state.auth {
+            Some(token) => {
+                publish.route_layer(from_fn_with_state(Arc::clone(token), auth::require_bearer))
+            }
+            None => publish,
+        };
+        router = router.route("/publish", publish);
     }
     router
         .fallback(|| async { ApiError::NotFound })
@@ -71,6 +83,16 @@ mod tests {
             role,
             max_body_bytes: 1024,
             publisher,
+            auth: None,
+        })
+    }
+
+    fn authed_app(publisher: Arc<FakePublisher>) -> Router {
+        router(AppState {
+            role: Role::Api,
+            max_body_bytes: 1024,
+            publisher,
+            auth: Some(Arc::new(SecretString::new("s3cret".into()))),
         })
     }
 
@@ -206,5 +228,71 @@ mod tests {
         let body = json!({ "queue": "q", "payload": 1 }).to_string();
         let (status, _, _) = send(app(Role::Consumers, Arc::default()), post_publish(body)).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    fn publish_with_authorization(value: Option<&str>) -> Request<Body> {
+        let mut builder =
+            Request::post("/publish").header(header::CONTENT_TYPE, "application/json");
+        if let Some(value) = value {
+            builder = builder.header(header::AUTHORIZATION, value);
+        }
+        builder
+            .body(Body::from(
+                json!({ "queue": "q", "payload": 1 }).to_string(),
+            ))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn publish_requires_the_bearer_token_when_configured() {
+        let cases = [
+            (None, StatusCode::UNAUTHORIZED),
+            (Some("Bearer wrong"), StatusCode::UNAUTHORIZED),
+            (Some("Bearer s3cret-extra"), StatusCode::UNAUTHORIZED),
+            (Some("Basic czNjcmV0"), StatusCode::UNAUTHORIZED),
+            (Some("s3cret"), StatusCode::UNAUTHORIZED),
+            (Some("bearer s3cret"), StatusCode::OK),
+            (Some("Bearer s3cret"), StatusCode::OK),
+        ];
+        for (value, expected) in cases {
+            let publisher = Arc::new(FakePublisher::default());
+            let (status, headers, out) = send(
+                authed_app(publisher.clone()),
+                publish_with_authorization(value),
+            )
+            .await;
+
+            assert_eq!(status, expected, "{value:?}");
+            let published = publisher.published.lock().unwrap().len();
+            if expected == StatusCode::UNAUTHORIZED {
+                assert_eq!(out["error"]["code"], "unauthorized", "{value:?}");
+                assert_eq!(
+                    headers[header::WWW_AUTHENTICATE].to_str().unwrap(),
+                    "Bearer"
+                );
+                assert_eq!(published, 0, "{value:?}");
+            } else {
+                assert_eq!(published, 1, "{value:?}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn health_stays_open_when_auth_is_configured() {
+        let (status, _, body) = send(
+            authed_app(Arc::default()),
+            Request::get("/health").body(Body::empty()).unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"], "ok");
+    }
+
+    #[test]
+    fn constant_time_eq_compares_bytes() {
+        assert!(auth::constant_time_eq(b"abc", b"abc"));
+        assert!(!auth::constant_time_eq(b"abc", b"abd"));
+        assert!(!auth::constant_time_eq(b"abc", b"ab"));
+        assert!(!auth::constant_time_eq(b"", b"x"));
     }
 }

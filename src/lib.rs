@@ -4,4 +4,5 @@ pub mod config;
 pub mod consumers;
 pub mod error;
 pub mod message;
+pub mod shutdown;
 pub mod tasks;

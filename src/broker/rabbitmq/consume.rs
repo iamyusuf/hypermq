@@ -144,9 +144,15 @@ struct RabbitSubscription {
 impl Subscription for RabbitSubscription {
     async fn next(&mut self) -> Option<Result<Box<dyn Delivery>, BrokerError>> {
         loop {
-            let mut delivery = match self.consumer.next().await? {
-                Ok(delivery) => delivery,
-                Err(err) => return Some(Err(BrokerError::Unavailable(err.to_string()))),
+            // The stream ends when the channel or connection closes, which is a lost connection.
+            let mut delivery = match self.consumer.next().await {
+                Some(Ok(delivery)) => delivery,
+                Some(Err(err)) => return Some(Err(BrokerError::Unavailable(err.to_string()))),
+                None => {
+                    return Some(Err(BrokerError::Unavailable(
+                        "consumer stream ended".into(),
+                    )));
+                }
             };
 
             let body = std::mem::take(&mut delivery.data);

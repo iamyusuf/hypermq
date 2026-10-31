@@ -1,12 +1,16 @@
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::sync::Semaphore;
 
 use super::retry::{Decision, RetryPolicy};
 use crate::broker::{Broker, BrokerError, Delivery, Subscription};
 use crate::message::Message;
+use crate::shutdown;
 use crate::tasks::{Task, TaskOutcome};
+
+const RECONNECT_BASE: Duration = Duration::from_secs(1);
+const RECONNECT_MAX: Duration = Duration::from_secs(30);
 
 /// Consumes one queue and settles each delivery from its Task outcome and the retry policy.
 pub struct Consumer {
@@ -41,29 +45,85 @@ impl Consumer {
         &self.name
     }
 
-    /// Consumes until the subscription ends or fails, then waits for in-flight deliveries to settle.
-    /// An error means the caller decides whether to resubscribe.
-    pub async fn run(&self, broker: &dyn Broker) -> Result<(), BrokerError> {
+    /// Consumes until shutdown or a failure. On shutdown it stops taking deliveries and waits for
+    /// in-flight ones to settle. An error means the caller decides whether to resubscribe.
+    pub async fn run(
+        &self,
+        broker: &dyn Broker,
+        shutdown: &shutdown::Receiver,
+    ) -> Result<(), BrokerError> {
         let mut subscription = broker.consume(&self.queue, self.prefetch).await?;
         let slots = Arc::new(Semaphore::new(usize::from(self.prefetch)));
-        let result = self.pump(subscription.as_mut(), &slots).await;
+        let mut stop = shutdown.clone();
+        let result = self.pump(subscription.as_mut(), &slots, &mut stop).await;
         // Taking every slot waits until no delivery is still unsettled.
         let _ = slots.acquire_many(u32::from(self.prefetch)).await;
         result
+    }
+
+    /// Runs the consumer and resubscribes with backoff after broker failures, until shutdown.
+    /// A failure that is not a connection problem stops the consumer.
+    pub async fn supervise(
+        &self,
+        broker: &dyn Broker,
+        shutdown: &shutdown::Receiver,
+    ) -> Result<(), BrokerError> {
+        self.supervise_with(broker, shutdown, RECONNECT_BASE, RECONNECT_MAX)
+            .await
+    }
+
+    async fn supervise_with(
+        &self,
+        broker: &dyn Broker,
+        shutdown: &shutdown::Receiver,
+        base: Duration,
+        max: Duration,
+    ) -> Result<(), BrokerError> {
+        let mut stop = shutdown.clone();
+        let mut failures: u32 = 0;
+        loop {
+            let started = Instant::now();
+            let err = match self.run(broker, shutdown).await {
+                Ok(()) => return Ok(()),
+                Err(err @ BrokerError::Operation(_)) => return Err(err),
+                Err(err) => err,
+            };
+            // A session that lasted at least `max` was healthy, so the backoff starts over.
+            if started.elapsed() >= max {
+                failures = 0;
+            }
+            failures = failures.saturating_add(1);
+            let delay = backoff_delay(base, max, failures);
+            tracing::warn!(consumer = %self.name, %err, delay = ?delay, "reconnecting after broker failure");
+            tokio::select! {
+                biased;
+                () = shutdown::requested(&mut stop) => return Ok(()),
+                () = tokio::time::sleep(delay) => {}
+            }
+        }
     }
 
     async fn pump(
         &self,
         subscription: &mut dyn Subscription,
         slots: &Arc<Semaphore>,
+        stop: &mut shutdown::Receiver,
     ) -> Result<(), BrokerError> {
         loop {
             // A slot is taken before pulling, so unsettled deliveries never exceed the prefetch.
-            let slot = Arc::clone(slots)
-                .acquire_owned()
-                .await
-                .map_err(|_| BrokerError::Operation("consumer slots were closed".into()))?;
-            let Some(next) = subscription.next().await else {
+            let slot = tokio::select! {
+                biased;
+                () = shutdown::requested(stop) => return Ok(()),
+                slot = Arc::clone(slots).acquire_owned() => {
+                    slot.map_err(|_| BrokerError::Operation("consumer slots were closed".into()))?
+                }
+            };
+            let next = tokio::select! {
+                biased;
+                () = shutdown::requested(stop) => return Ok(()),
+                next = subscription.next() => next,
+            };
+            let Some(next) = next else {
                 return Ok(());
             };
             let delivery = next?;
@@ -136,6 +196,12 @@ async fn run_task(task: Arc<dyn Task>, message: Message, timeout: Duration) -> T
     }
 }
 
+/// Delay before reconnect attempt `failures` (1-based): `base` doubled per failure, capped at `max`.
+fn backoff_delay(base: Duration, max: Duration, failures: u32) -> Duration {
+    let factor = 2u32.saturating_pow(failures.saturating_sub(1).min(31));
+    base.saturating_mul(factor).min(max)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, VecDeque};
@@ -144,6 +210,7 @@ mod tests {
 
     use async_trait::async_trait;
     use bytes::Bytes;
+    use tokio::sync::watch;
 
     use super::*;
     use crate::consumers::retry::{Backoff, RetryConfig};
@@ -209,24 +276,53 @@ mod tests {
     struct FakeSubscription {
         messages: VecDeque<Message>,
         log: Log,
+        /// When set, an exhausted subscription waits instead of ending.
+        hang: bool,
     }
 
     #[async_trait]
     impl Subscription for FakeSubscription {
         async fn next(&mut self) -> Option<Result<Box<dyn Delivery>, BrokerError>> {
-            self.messages.pop_front().map(|message| {
-                Ok(Box::new(FakeDelivery {
+            if let Some(message) = self.messages.pop_front() {
+                return Some(Ok(Box::new(FakeDelivery {
                     message,
                     log: Arc::clone(&self.log),
-                }) as Box<dyn Delivery>)
-            })
+                }) as Box<dyn Delivery>));
+            }
+            if self.hang {
+                std::future::pending::<()>().await;
+            }
+            None
         }
+    }
+
+    /// Why a scripted `consume` call fails.
+    #[derive(Clone, Copy)]
+    enum Failure {
+        Unavailable,
+        Operation,
     }
 
     struct FakeBroker {
         messages: Vec<Message>,
         log: Log,
-        fail_consume: bool,
+        /// Failures for the first `consume` calls, in order; later calls succeed.
+        script: Mutex<VecDeque<Failure>>,
+        hang_when_empty: bool,
+    }
+
+    fn fake_broker(
+        messages: Vec<Message>,
+        log: &Log,
+        script: Vec<Failure>,
+        hang_when_empty: bool,
+    ) -> FakeBroker {
+        FakeBroker {
+            messages,
+            log: Arc::clone(log),
+            script: Mutex::new(VecDeque::from(script)),
+            hang_when_empty,
+        }
     }
 
     #[async_trait]
@@ -236,14 +332,27 @@ mod tests {
             _queue: &str,
             _prefetch: u16,
         ) -> Result<Box<dyn Subscription>, BrokerError> {
-            if self.fail_consume {
-                return Err(BrokerError::Unavailable("connection lost".into()));
+            let failure = self.script.lock().unwrap().pop_front();
+            match failure {
+                Some(Failure::Unavailable) => {
+                    return Err(BrokerError::Unavailable("connection lost".into()));
+                }
+                Some(Failure::Operation) => {
+                    return Err(BrokerError::Operation("queue is missing".into()));
+                }
+                None => {}
             }
             Ok(Box::new(FakeSubscription {
                 messages: VecDeque::from(self.messages.clone()),
                 log: Arc::clone(&self.log),
+                hang: self.hang_when_empty,
             }))
         }
+    }
+
+    /// Shutdown receiver whose sender is dropped, so shutdown never fires.
+    fn no_shutdown() -> shutdown::Receiver {
+        watch::channel(false).1
     }
 
     /// Returns the outcome chosen by a closure over the message.
@@ -322,12 +431,8 @@ mod tests {
 
     async fn run(consumer: &Consumer, messages: Vec<Message>) -> Vec<(String, Action)> {
         let log = Log::default();
-        let broker = FakeBroker {
-            messages,
-            log: Arc::clone(&log),
-            fail_consume: false,
-        };
-        consumer.run(&broker).await.unwrap();
+        let broker = fake_broker(messages, &log, vec![], false);
+        consumer.run(&broker, &no_shutdown()).await.unwrap();
         log.lock().unwrap().clone()
     }
 
@@ -477,13 +582,9 @@ mod tests {
             1,
             Duration::from_secs(5),
         );
-        let broker = FakeBroker {
-            messages: vec![],
-            log: Log::default(),
-            fail_consume: true,
-        };
+        let broker = fake_broker(vec![], &Log::default(), vec![Failure::Unavailable], false);
         assert!(matches!(
-            c.run(&broker).await,
+            c.run(&broker, &no_shutdown()).await,
             Err(BrokerError::Unavailable(_))
         ));
     }
@@ -497,5 +598,145 @@ mod tests {
             Duration::from_secs(5),
         );
         assert!(run(&c, vec![]).await.is_empty());
+    }
+
+    #[test]
+    fn backoff_doubles_and_caps_at_max() {
+        let base = Duration::from_secs(1);
+        let max = Duration::from_secs(30);
+        assert_eq!(backoff_delay(base, max, 1), Duration::from_secs(1));
+        assert_eq!(backoff_delay(base, max, 2), Duration::from_secs(2));
+        assert_eq!(backoff_delay(base, max, 5), Duration::from_secs(16));
+        assert_eq!(backoff_delay(base, max, 6), max);
+        assert_eq!(backoff_delay(base, max, u32::MAX), max);
+    }
+
+    #[tokio::test]
+    async fn reconnects_after_broker_failures() {
+        let c = consumer(
+            outcome_task(|_| TaskOutcome::Success),
+            3,
+            1,
+            Duration::from_secs(5),
+        );
+        let log = Log::default();
+        let broker = fake_broker(
+            vec![message("m1", 1)],
+            &log,
+            vec![Failure::Unavailable, Failure::Unavailable],
+            false,
+        );
+        c.supervise_with(
+            &broker,
+            &no_shutdown(),
+            Duration::from_millis(1),
+            Duration::from_millis(5),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            log.lock().unwrap().clone(),
+            vec![("m1".to_owned(), Action::Ack)]
+        );
+    }
+
+    #[tokio::test]
+    async fn operation_failure_stops_without_reconnecting() {
+        let c = consumer(
+            outcome_task(|_| TaskOutcome::Success),
+            3,
+            1,
+            Duration::from_secs(5),
+        );
+        let log = Log::default();
+        let broker = fake_broker(
+            vec![message("m1", 1)],
+            &log,
+            vec![Failure::Operation],
+            false,
+        );
+        let result = c
+            .supervise_with(
+                &broker,
+                &no_shutdown(),
+                Duration::from_millis(1),
+                Duration::from_millis(5),
+            )
+            .await;
+        assert!(matches!(result, Err(BrokerError::Operation(_))));
+        // A reconnect would have acked m1, so an empty log shows no second attempt.
+        assert!(log.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn shutdown_stops_an_idle_consumer() {
+        let c = consumer(
+            outcome_task(|_| TaskOutcome::Success),
+            3,
+            1,
+            Duration::from_secs(5),
+        );
+        let broker = fake_broker(vec![], &Log::default(), vec![], true);
+        let (stop, shutdown) = watch::channel(false);
+        let stopper = async {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            let _ = stop.send(true);
+        };
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(c.run(&broker, &shutdown), stopper)
+        })
+        .await
+        .expect("consumer did not stop on shutdown");
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn shutdown_lets_in_flight_work_settle() {
+        let c = consumer(
+            Arc::new(SleepingTask(Duration::from_millis(50))),
+            3,
+            1,
+            Duration::from_secs(5),
+        );
+        let log = Log::default();
+        let broker = fake_broker(vec![message("m1", 1)], &log, vec![], true);
+        let (stop, shutdown) = watch::channel(false);
+        let stopper = async {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            let _ = stop.send(true);
+        };
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(c.run(&broker, &shutdown), stopper)
+        })
+        .await
+        .expect("consumer did not stop on shutdown");
+        assert!(result.is_ok());
+        assert_eq!(
+            log.lock().unwrap().clone(),
+            vec![("m1".to_owned(), Action::Ack)]
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_interrupts_reconnect_backoff() {
+        let c = consumer(
+            outcome_task(|_| TaskOutcome::Success),
+            3,
+            1,
+            Duration::from_secs(5),
+        );
+        let broker = fake_broker(vec![], &Log::default(), vec![Failure::Unavailable], false);
+        let (stop, shutdown) = watch::channel(false);
+        let stopper = async {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            let _ = stop.send(true);
+        };
+        let hour = Duration::from_secs(3600);
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(c.supervise_with(&broker, &shutdown, hour, hour), stopper)
+        })
+        .await
+        .expect("backoff ignored shutdown");
+        assert!(result.is_ok());
     }
 }

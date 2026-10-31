@@ -6,6 +6,8 @@
 
 `Content-Type: application/json`
 
+When `http_api.bearer_token` is set, the request must also send `Authorization: Bearer <token>`. The scheme is case-insensitive. `GET /health` stays open either way. When no token is configured, `/publish` accepts any client and a warning is logged at startup.
+
 ```json
 {
   "exchange": "orders",
@@ -46,6 +48,7 @@ Errors share one shape:
 | Status | `code` | Meaning |
 |---|---|---|
 | 400 | `invalid_request` | Malformed JSON or a field rule above was violated. |
+| 401 | `unauthorized` | A bearer token is configured and the `Authorization` header is missing or wrong. Includes `WWW-Authenticate: Bearer`. |
 | 404 | `target_not_found` | The exchange does not exist. |
 | 413 | `payload_too_large` | Body exceeds `max_body_bytes`. |
 | 422 | `unroutable` | The broker accepted the message but no queue matched (no binding, or the queue does not exist). |

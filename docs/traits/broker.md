@@ -55,7 +55,7 @@ pub trait Delivery: Send {
 
 - Ack/nack happens only through `Delivery`, and only from the consumer engine.
 - Redelivery must never loop forever: the attempt count travels with the message and `RetryPolicy` bounds it.
-- Reconnect handling lives in the implementation; the stream yields an error and the engine resubscribes. The RabbitMQ implementation does not reconnect yet (Phase 5); a stream error ends the consumer.
+- Reconnect handling lives in the engine: the stream yields an `Unavailable` error and the engine resubscribes with backoff. An `Operation` error stops that consumer.
 
 ### RabbitMQ implementation
 

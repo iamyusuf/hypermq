@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::Duration;
 
 use clap::Parser;
 use hypermq::api::{self, AppState};
@@ -10,7 +11,12 @@ use hypermq::config::{Config, Role};
 use hypermq::consumers;
 use hypermq::error::Error;
 use hypermq::tasks::TaskRegistry;
+use tokio::sync::watch;
+use tokio::task::JoinSet;
 use tracing_subscriber::EnvFilter;
+
+/// How long consumers may finish in-flight deliveries after shutdown starts.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
 
 #[derive(Parser)]
 #[command(
@@ -64,15 +70,18 @@ async fn run(cli: Cli) -> Result<(), Error> {
         result?;
     }
 
+    let (stop, shutdown) = watch::channel(false);
+    let stop = Arc::new(stop);
+    let mut consumer_tasks = JoinSet::new();
     if cli.role != Role::Api {
         let broker = Arc::new(RabbitBroker::new(config.broker.url.clone()));
         for consumer in consumers {
             let broker = Arc::clone(&broker);
-            tokio::spawn(async move {
+            let shutdown = shutdown.clone();
+            consumer_tasks.spawn(async move {
                 let name = consumer.name().to_owned();
-                match consumer.run(broker.as_ref()).await {
+                match consumer.supervise(broker.as_ref(), &shutdown).await {
                     Ok(()) => tracing::info!(consumer = %name, "consumer stopped"),
-                    // Reconnecting after broker failures is part of Phase 5.
                     Err(err) => tracing::error!(consumer = %name, %err, "consumer stopped"),
                 }
             });
@@ -86,17 +95,74 @@ async fn run(cli: Cli) -> Result<(), Error> {
         tracing::warn!(%err, "RabbitMQ is unreachable at startup; publishes fail until it recovers");
     }
 
+    if cli.role != Role::Consumers && config.http_api.bearer_token.is_none() {
+        tracing::warn!("http_api.bearer_token is not set; POST /publish accepts any client");
+    }
     let listener = tokio::net::TcpListener::bind(config.http_api.bind).await?;
     tracing::info!(role = cli.role.as_str(), bind = %config.http_api.bind, "starting");
 
-    axum::serve(
+    let signal_stop = Arc::clone(&stop);
+    let server = axum::serve(
         listener,
         api::router(AppState {
             role: cli.role,
             max_body_bytes: config.http_api.max_body_bytes,
             publisher,
+            auth: config.http_api.bearer_token.map(Arc::new),
         }),
     )
-    .await?;
+    .with_graceful_shutdown(async move {
+        shutdown_signal().await;
+        tracing::info!("shutdown requested; stopping consumers and draining connections");
+        let _ = signal_stop.send(true);
+    });
+    let served = server.await;
+
+    // Also runs when the server fails, so consumers do not keep running without the API.
+    let _ = stop.send(true);
+    stop_consumers(&mut consumer_tasks).await;
+    served?;
     Ok(())
+}
+
+/// Waits for the consumers to finish, aborting any still running after the grace period.
+async fn stop_consumers(tasks: &mut JoinSet<()>) {
+    let drained = tokio::time::timeout(SHUTDOWN_GRACE, async {
+        while tasks.join_next().await.is_some() {}
+    })
+    .await;
+    if drained.is_err() {
+        tracing::warn!(grace = ?SHUTDOWN_GRACE, "consumers did not stop within the grace period; aborting them");
+        tasks.abort_all();
+    }
+}
+
+/// Resolves on Ctrl+C, or on SIGTERM on unix. A listener that cannot be installed never fires.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(err) = tokio::signal::ctrl_c().await {
+            tracing::error!(%err, "failed to listen for Ctrl+C");
+            std::future::pending::<()>().await;
+        }
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(err) => {
+                tracing::error!(%err, "failed to listen for SIGTERM");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => {}
+        () = terminate => {}
+    }
 }

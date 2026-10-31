@@ -188,6 +188,7 @@ Run format, lint, and unit tests before committing.
 |---|---|---|
 | `task-http` | yes | HTTP Task kind |
 | `task-amqp` | yes | Publish-to-broker Task kind |
+| `task-email` | yes | Email (SMTP) Task kind |
 | `outbox` | via backends | Outbox store, relay, and `hypermq migrate` (SeaORM) |
 | `outbox-postgres` | yes | PostgreSQL backend (implies `outbox`) |
 | `outbox-mysql` | yes | MySQL backend (implies `outbox`) |

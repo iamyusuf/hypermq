@@ -31,7 +31,8 @@ hypermq/
 │   └── tasks/               # Task trait, TaskOutcome, TaskFactory, TaskRegistry
 │       ├── mod.rs
 │       ├── http/            # HTTP Task kind
-│       └── amqp/            # publish-to-broker Task kind; later kinds each get their own module
+│       ├── amqp/            # publish-to-broker Task kind
+│       └── email/           # SMTP Task kind; later kinds each get their own module
 ├── tests/                   # integration tests that need RabbitMQ, PostgreSQL, or MySQL
 └── target/                  # build output; never edit or commit
 ```
@@ -69,7 +70,7 @@ flowchart TD
 
 ## Features and dependencies
 
-- Each Task kind sits behind a Cargo feature (for example `task-http`), so Kafka, SMTP, and SMS dependencies are compiled only when enabled. `task-http` and `task-amqp` are on by default.
+- Each Task kind sits behind a Cargo feature (for example `task-http`), so Kafka, SMTP, and SMS dependencies are compiled only when enabled. `task-http`, `task-amqp`, and `task-email` are on by default.
 - Dependencies for a Task kind are added only when that kind is implemented.
 
 ## Testing layout

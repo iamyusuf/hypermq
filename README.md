@@ -1,8 +1,8 @@
 # HyperMQ
 
-HyperMQ is an HTTP wrapper around RabbitMQ. Clients publish messages over HTTP, and operators configure consumers that run a **Task** for each message received from RabbitMQ (an HTTP call to a downstream service first; SMS, email, publishing to another broker, and Kafka later).
+HyperMQ is an HTTP wrapper around RabbitMQ. Clients publish messages over HTTP, and operators configure consumers that run a **Task** for each message received from RabbitMQ (an HTTP call, publish to another broker, or email; SMS and Kafka later).
 
-> **Status:** Phases 0 to 4 and the `amqp` Task kind are implemented, and most of Phase 5 (hardening and operations) is in place. The [roadmap](docs/roadmap/roadmap.md) lists what remains.
+> **Status:** Phases 0 to 4 and the `amqp` and `email` Task kinds are implemented, and most of Phase 5 (hardening and operations) is in place. The [roadmap](docs/roadmap/roadmap.md) lists what remains.
 
 ## Features (planned)
 

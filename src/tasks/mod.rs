@@ -13,6 +13,8 @@ use crate::message::Message;
 
 #[cfg(feature = "task-amqp")]
 pub mod amqp;
+#[cfg(feature = "task-email")]
+pub mod email;
 #[cfg(feature = "task-http")]
 pub mod http;
 

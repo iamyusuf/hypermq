@@ -28,8 +28,14 @@ topology:
       dead_letter_exchange: orders.dlx
     - name: orders.created.dead
       durable: true
+    - name: orders.created.email
+      durable: true
+      dead_letter_exchange: orders.dlx
   bindings:
     - queue: orders.created
+      exchange: orders
+      routing_key: order.created
+    - queue: orders.created.email
       exchange: orders
       routing_key: order.created
     - queue: orders.created.dead
@@ -72,6 +78,29 @@ consumers:
         - archive.internal.example.com   # the only hosts the URL may target; required
       exchange: orders.archive           # set exactly one of exchange or queue
       routing_key: dead.order            # exchange targets only
+
+  - name: notify-customer
+    queue: orders.created.email
+    prefetch: 5
+    timeout: 30s
+    retry:
+      max_attempts: 5
+      base_delay: 5s
+      backoff: exponential
+      max_delay: 5m
+    task:
+      type: email
+      host: smtp.example.com
+      port: 587                        # defaults: 587 for starttls, 465 for tls, 25 for plaintext
+      tls: starttls                    # starttls (default), tls, or plaintext
+      username: orders@example.com
+      password: change-me              # keep the real password out of version control
+      from: HyperMQ <orders@example.com>
+      to:
+        - ops@example.com
+      subject: New order
+      allowed_hosts:
+        - smtp.example.com             # the only hosts the SMTP server may be; required
 
 # Optional. Publishes that RabbitMQ cannot take (broker down or publish failed) are stored here and
 # relayed later. Use postgres:// for development. Keep the real URL out of version control.

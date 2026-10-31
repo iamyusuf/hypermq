@@ -88,6 +88,8 @@ fn task_registry() -> TaskRegistry {
     let mut registry = TaskRegistry::default();
     #[cfg(feature = "task-http")]
     registry.register(Arc::new(hypermq::tasks::http::HttpTaskFactory));
+    #[cfg(feature = "task-email")]
+    registry.register(Arc::new(hypermq::tasks::email::EmailTaskFactory));
     #[cfg(feature = "task-amqp")]
     {
         let publishers: hypermq::tasks::amqp::PublisherFactory = Arc::new(

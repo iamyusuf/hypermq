@@ -14,6 +14,7 @@ use hypermq::consumers::consumer::Consumer;
 use hypermq::consumers::{self, ConsumerConfig};
 use hypermq::error::TopologyError;
 use hypermq::message::Message;
+use hypermq::metrics::Metrics;
 use hypermq::tasks::{Task, TaskConfigError, TaskFactory, TaskOutcome, TaskRegistry};
 use lapin::options::{
     BasicGetOptions, ExchangeDeclareOptions, ExchangeDeleteOptions, QueueBindOptions,
@@ -411,7 +412,9 @@ fn fake_consumer_yaml(queue: &str, max_attempts: u32) -> String {
 
 fn single_consumer(yaml: &str, registry: &TaskRegistry) -> Consumer {
     let configs: Vec<ConsumerConfig> = serde_yaml_ng::from_str(yaml).unwrap();
-    consumers::build(&configs, registry).unwrap().remove(0)
+    consumers::build(&configs, registry, &Metrics::default())
+        .unwrap()
+        .remove(0)
 }
 
 /// Declares a work queue whose rejected messages dead-letter to `dlq` through a fanout exchange.
@@ -659,6 +662,7 @@ mod http_end_to_end {
             role: Role::Api,
             max_body_bytes: 64 * 1024,
             publisher: Arc::new(publisher()),
+            metrics: Arc::default(),
             auth: None,
         });
         let body = json!({ "queue": queue, "payload": payload }).to_string();

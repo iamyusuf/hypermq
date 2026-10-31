@@ -2,7 +2,7 @@
 
 HyperMQ is an HTTP wrapper around RabbitMQ. Clients publish messages over HTTP, and operators configure consumers that run a **Task** for each message received from RabbitMQ (an HTTP call to a downstream service first; SMS, email, publishing to another broker, and Kafka later).
 
-> **Status:** early scaffold. The design is documented in [docs/](docs/); the code is not implemented yet.
+> **Status:** Phases 0 to 4 and the `amqp` Task kind are implemented, and most of Phase 5 (hardening and operations) is in place. The [roadmap](docs/roadmap/roadmap.md) lists what remains.
 
 ## Features (planned)
 
@@ -39,6 +39,21 @@ cargo fmt
 ```
 
 Publishing needs a reachable RabbitMQ (`broker.url` in the config file); without one the service starts and `POST /publish` answers `503`. Integration tests are ignored by default; see [AGENTS.md](AGENTS.md#commands).
+
+To run the container image, mount the config file at `/etc/hypermq/config.yaml` (the default `HYPERMQ_CONFIG` path in the image):
+
+```sh
+docker build -t hypermq .
+docker run --rm -v "$PWD/config.yaml:/etc/hypermq/config.yaml:ro" -p 8080:8080 hypermq
+```
+
+The image is built in CI but has not been verified against a live RabbitMQ yet.
+
+## Operations
+
+- `GET /metrics` exposes Prometheus metrics; see [docs/ops/observability.md](docs/ops/observability.md).
+- `--log-format json` (or `HYPERMQ_LOG_FORMAT=json`) writes structured logs.
+- `http_api.bearer_token` protects `POST /publish` and `/metrics`.
 
 ## Documentation
 

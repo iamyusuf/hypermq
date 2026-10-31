@@ -18,6 +18,20 @@ HyperMQ ships as one binary and one container image. A role setting decides whet
 
 The role is chosen by a CLI flag or config key, for example `hypermq --role consumers`. Planned for roadmap Phase 0 (selection) and Phase 5 (image and documented deployments).
 
+## Container image
+
+The [Dockerfile](../../Dockerfile) builds a release binary in a Rust stage and copies it into a slim Debian image. The runtime stage runs as a non-root user (uid 10001) and sets:
+
+- `HYPERMQ_CONFIG=/etc/hypermq/config.yaml`: mount the config file here at runtime. It is excluded from the image by [.dockerignore](../../.dockerignore) because it holds credentials.
+- `HYPERMQ_ROLE=all` and `HYPERMQ_LOG_FORMAT=json`: override with `-e` as needed.
+- Port `8080` (the HTTP API). The bind address comes from `http_api.bind` in the config.
+
+CI builds the image on every push. The image has not yet been run against a live RabbitMQ, so the broker-restart behavior from roadmap Phase 5 is not verified.
+
+## Observability
+
+Metrics and logging options are documented in [observability.md](../ops/observability.md).
+
 ```mermaid
 flowchart LR
     subgraph all[Single container: role all]

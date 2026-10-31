@@ -14,6 +14,7 @@ use serde::Deserialize;
 
 use crate::broker::{MAX_NAME_LEN, is_valid_name};
 use crate::error::ConfigError;
+use crate::metrics::Metrics;
 use crate::tasks::TaskRegistry;
 use consumer::Consumer;
 use retry::RetryConfig;
@@ -104,6 +105,7 @@ pub fn validate(consumers: &[ConsumerConfig]) -> Result<(), String> {
 pub fn build(
     consumers: &[ConsumerConfig],
     registry: &TaskRegistry,
+    metrics: &Metrics,
 ) -> Result<Vec<Consumer>, ConfigError> {
     validate(consumers).map_err(ConfigError::Invalid)?;
     consumers
@@ -120,6 +122,7 @@ pub fn build(
                 config.timeout,
                 task,
                 Arc::new(config.retry.clone()),
+                metrics.consumer(&config.name),
             ))
         })
         .collect()
@@ -267,14 +270,16 @@ task:
 
     #[test]
     fn build_creates_consumers_through_the_registry() {
-        let consumers = build(&[parse(VALID)], &registry()).unwrap();
+        let consumers = build(&[parse(VALID)], &registry(), &Metrics::default()).unwrap();
         assert_eq!(consumers.len(), 1);
     }
 
     #[test]
     fn build_rejects_unknown_task_type() {
         let yaml = VALID.replace("type: fake", "type: sms");
-        let err = build(&[parse(&yaml)], &registry()).err().unwrap();
+        let err = build(&[parse(&yaml)], &registry(), &Metrics::default())
+            .err()
+            .unwrap();
         assert!(
             matches!(err, ConfigError::Invalid(msg) if msg.contains("unknown task type `sms`"))
         );
@@ -283,7 +288,9 @@ task:
     #[test]
     fn build_reports_invalid_task_settings() {
         let yaml = VALID.replace("  url: https://example.internal/hook\n", "");
-        let err = build(&[parse(&yaml)], &registry()).err().unwrap();
+        let err = build(&[parse(&yaml)], &registry(), &Metrics::default())
+            .err()
+            .unwrap();
         assert!(matches!(err, ConfigError::Invalid(msg) if msg.contains("url is required")));
     }
 }

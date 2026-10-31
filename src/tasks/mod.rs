@@ -36,6 +36,17 @@ pub enum TaskOutcome {
     Permanent { reason: String },
 }
 
+impl TaskOutcome {
+    /// Short name for logs and metrics: `success`, `retryable`, or `permanent`.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::Retryable { .. } => "retryable",
+            Self::Permanent { .. } => "permanent",
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum TaskConfigError {
     #[error("unknown task type `{0}`")]

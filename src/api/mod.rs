@@ -6,8 +6,10 @@ mod publish;
 use std::sync::Arc;
 
 use axum::extract::{DefaultBodyLimit, State};
+use axum::http::header;
 use axum::middleware::from_fn_with_state;
-use axum::routing::{get, post};
+use axum::response::IntoResponse;
+use axum::routing::{MethodRouter, get, post};
 use axum::{Json, Router};
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -16,27 +18,24 @@ pub use error::ApiError;
 
 use crate::broker::Publisher;
 use crate::config::Role;
+use crate::metrics::Metrics;
 
 #[derive(Clone)]
 pub struct AppState {
     pub role: Role,
     pub max_body_bytes: usize,
     pub publisher: Arc<dyn Publisher>,
-    /// When set, `/publish` requires this bearer token. `/health` is never protected.
+    pub metrics: Arc<Metrics>,
+    /// When set, `/publish` and `/metrics` require this bearer token. `/health` is never protected.
     pub auth: Option<Arc<SecretString>>,
 }
 
 pub fn router(state: AppState) -> Router {
-    let mut router = Router::new().route("/health", get(health));
+    let mut router = Router::new()
+        .route("/health", get(health))
+        .route("/metrics", guarded(get(metrics), &state.auth));
     if state.role != Role::Consumers {
-        let publish = post(publish::publish);
-        let publish = match &state.auth {
-            Some(token) => {
-                publish.route_layer(from_fn_with_state(Arc::clone(token), auth::require_bearer))
-            }
-            None => publish,
-        };
-        router = router.route("/publish", publish);
+        router = router.route("/publish", guarded(post(publish::publish), &state.auth));
     }
     router
         .fallback(|| async { ApiError::NotFound })
@@ -44,8 +43,31 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
+/// Applies the bearer-token check to a route when a token is configured.
+fn guarded(
+    route: MethodRouter<AppState>,
+    auth: &Option<Arc<SecretString>>,
+) -> MethodRouter<AppState> {
+    match auth {
+        Some(token) => {
+            route.route_layer(from_fn_with_state(Arc::clone(token), auth::require_bearer))
+        }
+        None => route,
+    }
+}
+
 async fn health(State(state): State<AppState>) -> Json<Value> {
     Json(json!({ "status": "ok", "role": state.role.as_str() }))
+}
+
+async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        state.metrics.render(),
+    )
 }
 
 #[cfg(test)]
@@ -83,6 +105,7 @@ mod tests {
             role,
             max_body_bytes: 1024,
             publisher,
+            metrics: Arc::default(),
             auth: None,
         })
     }
@@ -92,6 +115,7 @@ mod tests {
             role: Role::Api,
             max_body_bytes: 1024,
             publisher,
+            metrics: Arc::default(),
             auth: Some(Arc::new(SecretString::new("s3cret".into()))),
         })
     }
@@ -275,6 +299,57 @@ mod tests {
                 assert_eq!(published, 1, "{value:?}");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn metrics_reports_publish_results() {
+        let publisher = Arc::new(FakePublisher::default());
+        let app = app(Role::Api, publisher.clone());
+        send(
+            app.clone(),
+            post_publish(json!({ "queue": "q", "payload": 1 }).to_string()),
+        )
+        .await;
+        *publisher.fail_with.lock().unwrap() = Some(PublishError::Rejected);
+        send(
+            app.clone(),
+            post_publish(json!({ "queue": "q", "payload": 1 }).to_string()),
+        )
+        .await;
+
+        let res = app
+            .oneshot(Request::get("/metrics").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers()[header::CONTENT_TYPE],
+            "text/plain; version=0.0.4; charset=utf-8"
+        );
+        let text = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec())
+            .unwrap();
+        assert!(text.contains("hypermq_messages_published_total{result=\"accepted\"} 1"));
+        assert!(text.contains("hypermq_messages_published_total{result=\"failed\"} 1"));
+    }
+
+    #[tokio::test]
+    async fn metrics_requires_the_bearer_token_when_configured() {
+        let res = authed_app(Arc::default())
+            .oneshot(Request::get("/metrics").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+        let res = authed_app(Arc::default())
+            .oneshot(
+                Request::get("/metrics")
+                    .header(header::AUTHORIZATION, "Bearer s3cret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
     }
 
     #[tokio::test]

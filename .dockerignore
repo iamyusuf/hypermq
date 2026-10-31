@@ -1,0 +1,8 @@
+target
+.git
+.gitignore
+.DS_Store
+config.yaml
+docs
+tests
+docker-compose.yml

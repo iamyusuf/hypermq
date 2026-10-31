@@ -40,7 +40,9 @@ pub async fn publish(
     let request = body.into_request()?;
     let message_id = request.message_id.clone();
 
-    state.publisher.publish(request).await.map_err(|err| {
+    let result = state.publisher.publish(request).await;
+    state.metrics.record_publish(result.is_ok());
+    result.map_err(|err| {
         tracing::warn!(%err, %message_id, "publish failed");
         ApiError::from(err)
     })?;

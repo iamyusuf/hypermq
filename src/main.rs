@@ -3,13 +3,14 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use hypermq::api::{self, AppState};
 use hypermq::broker::rabbitmq::{RabbitBroker, RabbitPublisher, RabbitTopology};
 use hypermq::broker::topology;
 use hypermq::config::{Config, Role};
 use hypermq::consumers;
 use hypermq::error::Error;
+use hypermq::metrics::Metrics;
 use hypermq::tasks::TaskRegistry;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
@@ -31,20 +32,40 @@ struct Cli {
     /// Which components this instance runs.
     #[arg(long, env = "HYPERMQ_ROLE", value_enum, default_value = "all")]
     role: Role,
+
+    /// Log output format. Filter with `RUST_LOG` (default `info`).
+    #[arg(long, env = "HYPERMQ_LOG_FORMAT", value_enum, default_value = "text")]
+    log_format: LogFormat,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum LogFormat {
+    Text,
+    Json,
 }
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-        .init();
+    let cli = Cli::parse();
+    init_logging(cli.log_format);
 
-    match run(Cli::parse()).await {
+    match run(cli).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             tracing::error!(%err, "fatal error");
             ExitCode::FAILURE
         }
+    }
+}
+
+fn init_logging(format: LogFormat) {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
+    match format {
+        LogFormat::Text => tracing_subscriber::fmt().with_env_filter(filter).init(),
+        LogFormat::Json => tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .json()
+            .init(),
     }
 }
 
@@ -71,7 +92,8 @@ fn task_registry() -> TaskRegistry {
 async fn run(cli: Cli) -> Result<(), Error> {
     let config = Config::load(&cli.config)?;
     // Unknown task kinds and invalid task settings fail here, before any connection is made.
-    let consumers = consumers::build(&config.consumers, &task_registry())?;
+    let metrics = Arc::new(Metrics::default());
+    let consumers = consumers::build(&config.consumers, &task_registry(), &metrics)?;
 
     // Fails startup when declared topology cannot be created or conflicts with the broker.
     if !config.topology.is_empty() {
@@ -119,6 +141,7 @@ async fn run(cli: Cli) -> Result<(), Error> {
             role: cli.role,
             max_body_bytes: config.http_api.max_body_bytes,
             publisher,
+            metrics: Arc::clone(&metrics),
             auth: config.http_api.bearer_token.map(Arc::new),
         }),
     )

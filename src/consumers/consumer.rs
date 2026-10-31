@@ -6,6 +6,7 @@ use tokio::sync::Semaphore;
 use super::retry::{Decision, RetryPolicy};
 use crate::broker::{Broker, BrokerError, Delivery, Subscription};
 use crate::message::Message;
+use crate::metrics::{ConsumerMetrics, Settlement};
 use crate::shutdown;
 use crate::tasks::{Task, TaskOutcome};
 
@@ -20,6 +21,7 @@ pub struct Consumer {
     timeout: Duration,
     task: Arc<dyn Task>,
     policy: Arc<dyn RetryPolicy>,
+    metrics: Arc<ConsumerMetrics>,
 }
 
 impl Consumer {
@@ -30,6 +32,7 @@ impl Consumer {
         timeout: Duration,
         task: Arc<dyn Task>,
         policy: Arc<dyn RetryPolicy>,
+        metrics: Arc<ConsumerMetrics>,
     ) -> Self {
         Self {
             name,
@@ -38,6 +41,7 @@ impl Consumer {
             timeout,
             task,
             policy,
+            metrics,
         }
     }
 
@@ -132,8 +136,9 @@ impl Consumer {
             let policy = Arc::clone(&self.policy);
             let timeout = self.timeout;
             let name = self.name.clone();
+            let metrics = Arc::clone(&self.metrics);
             tokio::spawn(async move {
-                settle(delivery, task, policy, timeout, &name).await;
+                settle(delivery, task, policy, timeout, &name, &metrics).await;
                 // The slot is released when this future ends.
                 drop(slot);
             });
@@ -147,28 +152,42 @@ async fn settle(
     policy: Arc<dyn RetryPolicy>,
     timeout: Duration,
     consumer: &str,
+    metrics: &ConsumerMetrics,
 ) {
     let message = delivery.message().clone();
     let message_id = message.id.clone();
     let attempt = message.attempt;
+    metrics.record_delivery();
 
+    let started = Instant::now();
     let outcome = run_task(task, message, timeout).await;
-    if outcome != TaskOutcome::Success {
-        tracing::warn!(consumer, message_id = %message_id, attempt, outcome = ?outcome, "task did not succeed");
-    }
+    let duration = started.elapsed();
+    metrics.record_task(&outcome, duration);
 
     let decision = policy.decide(&outcome, attempt);
-    let result = match decision {
-        Decision::Ack => delivery.ack().await,
-        Decision::Retry { delay } => delivery.retry(delay).await,
-        Decision::DeadLetter => delivery.reject().await,
+    let (settlement, result) = match decision {
+        Decision::Ack => (Settlement::Ack, delivery.ack().await),
+        Decision::Retry { delay } => (Settlement::Retry, delivery.retry(delay).await),
+        Decision::DeadLetter => (Settlement::DeadLetter, delivery.reject().await),
+    };
+    let duration_ms = duration.as_secs_f64() * 1000.0;
+    let reason = match &outcome {
+        TaskOutcome::Success => "",
+        TaskOutcome::Retryable { reason, .. } | TaskOutcome::Permanent { reason } => {
+            reason.as_str()
+        }
     };
     match result {
         Ok(()) => {
-            tracing::debug!(consumer, message_id = %message_id, decision = ?decision, "delivery settled");
+            metrics.record_settlement(settlement);
+            if settlement == Settlement::Ack {
+                tracing::debug!(consumer, message_id = %message_id, attempt, outcome = outcome.label(), action = settlement.label(), duration_ms, "delivery settled");
+            } else {
+                tracing::info!(consumer, message_id = %message_id, attempt, outcome = outcome.label(), action = settlement.label(), duration_ms, reason, "delivery settled");
+            }
         }
         Err(err) => {
-            tracing::error!(consumer, message_id = %message_id, %err, "failed to settle delivery");
+            tracing::error!(consumer, message_id = %message_id, attempt, action = settlement.label(), %err, "failed to settle delivery");
         }
     }
 }
@@ -426,6 +445,7 @@ mod tests {
             timeout,
             task,
             retry_config(max_attempts),
+            Arc::default(),
         )
     }
 

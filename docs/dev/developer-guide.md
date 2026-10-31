@@ -31,7 +31,7 @@ You can also create it by hand in the management UI at `http://localhost:15673` 
 
 ## Development environment
 
-The Compose file provides a local RabbitMQ for development only; production uses a dedicated RabbitMQ that HyperMQ reaches through configuration. Only the `rabbitmq` service exists in [docker-compose.yml](../../docker-compose.yml) today; the HyperMQ image and service are planned.
+The Compose file provides a local RabbitMQ and PostgreSQL for development only; production uses a dedicated broker and database that HyperMQ reaches through configuration. The `rabbitmq` and `postgres` services exist in [docker-compose.yml](../../docker-compose.yml) today; the HyperMQ image and service are planned.
 
 ### Principles
 
@@ -45,11 +45,14 @@ The Compose file provides a local RabbitMQ for development only; production uses
 | Service | Image | Purpose | Host ports | Status |
 |---|---|---|---|---|
 | `rabbitmq` | `rabbitmq:4-management` | Local broker with management UI | `5673` (AMQP), `15673` (UI) | In `docker-compose.yml` |
+| `postgres` | `postgres:17` | Local database for the publish outbox (Phase 8) | `5433` | In `docker-compose.yml`; unused until Phase 8 |
 | `hypermq` | built from `Dockerfile` | The application | `8080` (HTTP API) | Planned |
 
 The host ports `5673` and `15673` avoid clashing with a RabbitMQ already bound to `5672`/`15672`. Inside the Compose network the broker still listens on `5672`.
 
 The default user is `hypermq` with password `change-me`; override with `RABBITMQ_USER` and `RABBITMQ_PASS` in a local `.env` file (read by Compose for the RabbitMQ container only).
+
+The `postgres` service creates database `hypermq` for user `hypermq` with password `change-me`. Override with `POSTGRES_DB`, `POSTGRES_USER`, and `POSTGRES_PASSWORD` in `.env`.
 
 ```mermaid
 flowchart LR

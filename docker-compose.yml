@@ -17,5 +17,23 @@ services:
       timeout: 5s
       retries: 10
 
+  postgres:
+    image: postgres:17
+    ports:
+      # Host port avoids clashing with a PostgreSQL already bound to 5432.
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-hypermq}
+      POSTGRES_USER: ${POSTGRES_USER:-hypermq}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hypermq} -d ${POSTGRES_DB:-hypermq}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
 volumes:
   rabbitmq-data:
+  postgres-data:

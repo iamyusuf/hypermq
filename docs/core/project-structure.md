@@ -25,7 +25,8 @@ hypermq/
 │   │   └── retry.rs         # RetryPolicy trait and default implementation
 │   └── tasks/               # Task trait, TaskOutcome, TaskFactory, TaskRegistry
 │       ├── mod.rs
-│       └── http/            # first Task kind; later kinds each get their own module
+│       ├── http/            # HTTP Task kind
+│       └── amqp/            # publish-to-broker Task kind; later kinds each get their own module
 ├── tests/                   # integration tests that need RabbitMQ
 └── target/                  # build output; never edit or commit
 ```
@@ -55,11 +56,11 @@ flowchart TD
 - `consumers` depends on the `Broker`, `Task`, and `RetryPolicy` traits only; it never names `broker/rabbitmq` or any `tasks/<kind>` module.
 - Only `broker/rabbitmq` imports the AMQP client.
 - `message` and `error` have no dependency on other project modules.
-- Each `tasks/<kind>` module depends on `tasks` and `message`, never on `consumers` or `broker`.
+- Each `tasks/<kind>` module depends on `tasks` and `message`, never on `consumers`. A kind that publishes to a broker (`tasks/amqp`) may use the `broker` traits and types (`Publisher`, `PublishRequest`), but never `broker/rabbitmq`. `main` passes it a `PublisherFactory` that builds the concrete publisher.
 
 ## Features and dependencies
 
-- Each Task kind sits behind a Cargo feature (for example `task-http`), so Kafka, SMTP, and SMS dependencies are compiled only when enabled. `task-http` is on by default.
+- Each Task kind sits behind a Cargo feature (for example `task-http`), so Kafka, SMTP, and SMS dependencies are compiled only when enabled. `task-http` and `task-amqp` are on by default.
 - Dependencies for a Task kind are added only when that kind is implemented.
 
 ## Testing layout

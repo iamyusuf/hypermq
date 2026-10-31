@@ -11,6 +11,8 @@ use async_trait::async_trait;
 
 use crate::message::Message;
 
+#[cfg(feature = "task-amqp")]
+pub mod amqp;
 #[cfg(feature = "task-http")]
 pub mod http;
 

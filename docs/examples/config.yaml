@@ -55,3 +55,20 @@ consumers:
       headers:
         Authorization: Bearer change-me
       idempotency_header: Idempotency-Key   # filled with the stable message id
+
+  - name: archive-dead-orders
+    queue: orders.created.dead
+    prefetch: 5
+    timeout: 10s
+    retry:
+      max_attempts: 3
+      base_delay: 5s
+      backoff: exponential
+      max_delay: 1m
+    task:
+      type: amqp
+      url: amqp://archive:change-me@archive.internal.example.com:5672/
+      allowed_hosts:
+        - archive.internal.example.com   # the only hosts the URL may target; required
+      exchange: orders.archive           # set exactly one of exchange or queue
+      routing_key: dead.order            # exchange targets only
